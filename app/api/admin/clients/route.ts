@@ -1,4 +1,5 @@
 import { auth } from "@/app/lib/auth";
+import type { SessionUser } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 
