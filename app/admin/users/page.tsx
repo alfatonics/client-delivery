@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { generateFriendlyPassword } from "@/app/lib/password";
 
 type User = {
   id: string;
@@ -28,6 +29,7 @@ export default function UsersPage() {
     password: "",
     role: "CLIENT" as "ADMIN" | "STAFF" | "CLIENT",
   });
+  const [passwordEdited, setPasswordEdited] = useState(false);
   const [editFormData, setEditFormData] = useState({
     email: "",
     name: "",
@@ -40,6 +42,7 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [emailingUserId, setEmailingUserId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchUsers();
@@ -55,6 +58,44 @@ export default function UsersPage() {
       setError(e.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGeneratePassword = useCallback(() => {
+    setFormData((prev) => ({
+      ...prev,
+      password: generateFriendlyPassword(prev.email, prev.name),
+    }));
+    setPasswordEdited(false);
+  }, []);
+
+  useEffect(() => {
+    if (showForm && !passwordEdited) {
+      setFormData((prev) => ({
+        ...prev,
+        password: generateFriendlyPassword(prev.email, prev.name),
+      }));
+    }
+  }, [showForm, formData.email, formData.name, passwordEdited]);
+
+  const resetForm = () => {
+    setFormData({
+      email: "",
+      name: "",
+      password: "",
+      role: "CLIENT",
+    });
+    setPasswordEdited(false);
+  };
+
+  const toggleForm = () => {
+    if (showForm) {
+      setShowForm(false);
+      resetForm();
+      setError(null);
+    } else {
+      resetForm();
+      setShowForm(true);
     }
   };
 
@@ -77,12 +118,7 @@ export default function UsersPage() {
 
       await fetchUsers();
       setShowForm(false);
-      setFormData({
-        email: "",
-        name: "",
-        password: "",
-        role: "CLIENT",
-      });
+      resetForm();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -169,6 +205,16 @@ export default function UsersPage() {
     setError(null);
   };
 
+  const handleChangePasswordGenerate = () => {
+    setPasswordData((prev) => {
+      const generated = generateFriendlyPassword(
+        editFormData.email || formData.email,
+        editFormData.name || formData.name
+      );
+      return { password: generated, confirmPassword: generated };
+    });
+  };
+
   const onPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!changingPasswordUserId) return;
@@ -206,6 +252,35 @@ export default function UsersPage() {
     }
   };
 
+  const onSendCredentials = async (user: User) => {
+    if (
+      !confirm(
+        `Send login credentials to ${user.email}? This will reset their password.`
+      )
+    ) {
+      return;
+    }
+    setEmailingUserId(user.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}/credentials`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data.error || "Failed to send credentials to the user."
+        );
+      }
+      alert("Credentials sent successfully.");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setEmailingUserId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6">
@@ -236,7 +311,7 @@ export default function UsersPage() {
             </h1>
           </div>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={toggleForm}
             className={showForm ? "btn-secondary" : "btn-primary"}
           >
             {showForm ? "Cancel" : "Create User"}
@@ -280,16 +355,30 @@ export default function UsersPage() {
               <label className="block text-sm font-medium text-[#202124] mb-2">
                 Password
               </label>
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={formData.password}
-                onChange={(e) =>
-                  setFormData({ ...formData, password: e.target.value })
-                }
-                className="input"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  value={formData.password}
+                  onChange={(e) => {
+                    setPasswordEdited(true);
+                    setFormData({ ...formData, password: e.target.value });
+                  }}
+                  className="input flex-1"
+                />
+                <button
+                  type="button"
+                  onClick={handleGeneratePassword}
+                  className="btn-secondary whitespace-nowrap"
+                >
+                  Generate
+                </button>
+              </div>
+              <p className="text-xs text-[#5f6368] mt-1">
+                Auto-generates from the email/name. Edit if you want a custom
+                password.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium text-[#202124] mb-2">
@@ -462,19 +551,28 @@ export default function UsersPage() {
                                 <label className="block text-xs text-[#5f6368] mb-1">
                                   New Password
                                 </label>
-                                <input
-                                  type="password"
-                                  required
-                                  minLength={6}
-                                  value={passwordData.password}
-                                  onChange={(e) =>
-                                    setPasswordData({
-                                      ...passwordData,
-                                      password: e.target.value,
-                                    })
-                                  }
-                                  className="input text-sm"
-                                />
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    required
+                                    minLength={6}
+                                    value={passwordData.password}
+                                    onChange={(e) =>
+                                      setPasswordData({
+                                        ...passwordData,
+                                        password: e.target.value,
+                                      })
+                                    }
+                                    className="input text-sm flex-1"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={handleChangePasswordGenerate}
+                                    className="btn-secondary text-xs whitespace-nowrap"
+                                  >
+                                    Generate
+                                  </button>
+                                </div>
                               </div>
                               <div>
                                 <label className="block text-xs text-[#5f6368] mb-1">
@@ -562,6 +660,21 @@ export default function UsersPage() {
                               title="Change password"
                             >
                               Password
+                            </button>
+                            <button
+                              onClick={() => onSendCredentials(user)}
+                              disabled={emailingUserId === user.id}
+                              className="px-2 py-1 text-xs rounded"
+                              style={{
+                                backgroundColor: "#3c5495",
+                                color: "#ffffff",
+                                opacity: emailingUserId === user.id ? 0.6 : 1,
+                              }}
+                              title="Email credentials"
+                            >
+                              {emailingUserId === user.id
+                                ? "Emailing..."
+                                : "Email Credentials"}
                             </button>
                             <button
                               onClick={() => onDelete(user.id)}

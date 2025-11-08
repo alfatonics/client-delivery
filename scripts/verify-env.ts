@@ -70,8 +70,13 @@ async function verifyR2() {
 
 async function main() {
   assertEnv("DATABASE_URL");
+  assertEnv("SMTP_HOST");
+  assertEnv("SMTP_PORT");
+  assertEnv("EMAIL_FROM");
   await verifyR2();
-  console.log("ENV OK: DATABASE_URL present and R2 bucket reachable.");
+  console.log(
+    "ENV OK: DATABASE_URL present, email settings configured, and R2 bucket reachable."
+  );
 }
 
 main().catch((err) => {

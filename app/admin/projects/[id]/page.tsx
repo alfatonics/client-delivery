@@ -3,6 +3,7 @@
 import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { generateFriendlyPassword } from "@/app/lib/password";
 
 type Asset = {
   id: string;
@@ -56,6 +57,22 @@ type Project = {
   assets: Asset[];
   deliveries: Delivery[];
   folders: Folder[];
+  completionSubmittedAt: string | null;
+  completionSubmittedBy: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+  } | null;
+  completionNotifiedAt: string | null;
+  completionNotifiedBy: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+  } | null;
+  completionNotificationEmail?: string | null;
+  completionNotificationCc?: string | null;
 };
 
 export default function ProjectDetailPage({
@@ -87,6 +104,16 @@ export default function ProjectDetailPage({
   const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"all" | string>("all");
   const [copied, setCopied] = useState(false);
+  const [notifyEmail, setNotifyEmail] = useState("");
+  const [notifyCc, setNotifyCc] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [notifyError, setNotifyError] = useState<string | null>(null);
+  const [notifySuccess, setNotifySuccess] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  const folders: Folder[] = project?.folders ?? [];
 
   useEffect(() => {
     fetchData();
@@ -96,12 +123,12 @@ export default function ProjectDetailPage({
   // Auto-select first ASSETS folder when project loads
   useEffect(() => {
     if (project && viewMode === "all" && !selectedFolderId) {
-      const assetsFolder = project.folders.find((f) => f.type === "ASSETS");
+      const assetsFolder = folders.find((f) => f.type === "ASSETS");
       if (assetsFolder) {
         setSelectedFolderId(assetsFolder.id);
       }
     }
-  }, [project, viewMode, selectedFolderId]);
+  }, [project, viewMode, selectedFolderId, folders]);
 
   const fetchCurrentUser = async () => {
     try {
@@ -140,6 +167,19 @@ export default function ProjectDetailPage({
       setProject(projectData);
       setStaff(staffData);
       setSelectedStaffId(projectData.staff?.id || "");
+      setNotifyEmail(
+        projectData.completionNotificationEmail ||
+          projectData.client.email ||
+          ""
+      );
+      setNotifyCc(projectData.completionNotificationCc || "");
+      const initialLoginEmail = projectData.client?.email || "";
+      setLoginEmail(initialLoginEmail);
+      const generatedPassword = generateFriendlyPassword(
+        initialLoginEmail,
+        projectData.client?.name || null
+      );
+      setLoginPassword(generatedPassword);
     } catch (e: any) {
       console.error("Fetch error:", e);
       setError(e.message || "Failed to fetch data");
@@ -265,7 +305,7 @@ export default function ProjectDetailPage({
       // Determine target folder for assets (must be ASSETS folder)
       let targetFolderId: string | undefined;
       if (viewMode !== "all") {
-        const currentFolder = project?.folders.find((f) => f.id === viewMode);
+        const currentFolder = folders.find((f) => f.id === viewMode);
         if (currentFolder?.type !== "ASSETS") {
           throw new Error("Assets can only be uploaded to Assets folders");
         }
@@ -273,17 +313,13 @@ export default function ProjectDetailPage({
       } else {
         if (!selectedFolderId) {
           // Auto-select first ASSETS folder if none selected
-          const assetsFolder = project?.folders.find(
-            (f) => f.type === "ASSETS"
-          );
+          const assetsFolder = folders.find((f) => f.type === "ASSETS");
           if (!assetsFolder) {
             throw new Error("No Assets folder found. Please contact support.");
           }
           targetFolderId = assetsFolder.id;
         } else {
-          const selectedFolder = project?.folders.find(
-            (f) => f.id === selectedFolderId
-          );
+          const selectedFolder = folders.find((f) => f.id === selectedFolderId);
           if (selectedFolder?.type !== "ASSETS") {
             throw new Error("Assets can only be uploaded to Assets folders");
           }
@@ -377,6 +413,71 @@ export default function ProjectDetailPage({
     }
   };
 
+  const regenerateLoginPassword = () => {
+    const basisEmail = (loginEmail || project?.client?.email || "").trim();
+    const generated = generateFriendlyPassword(
+      basisEmail,
+      project?.client?.name || null
+    );
+    setLoginPassword(generated);
+  };
+
+  const sendCompletionEmail = async () => {
+    if (!project) return;
+    setSendingEmail(true);
+    setNotifyError(null);
+    setNotifySuccess(null);
+    try {
+      const trimmedEmail = notifyEmail.trim();
+      const trimmedCc = notifyCc.trim();
+      const payload: Record<string, unknown> = {};
+      if (trimmedEmail) {
+        payload.email = trimmedEmail;
+      }
+      if (trimmedCc) {
+        payload.cc = trimmedCc;
+      }
+      const trimmedLoginEmail = loginEmail.trim();
+      const trimmedLoginPassword = loginPassword.trim();
+      if (trimmedLoginEmail) {
+        payload.loginEmail = trimmedLoginEmail;
+      }
+      if (trimmedLoginPassword) {
+        payload.loginPassword = trimmedLoginPassword;
+      }
+
+      const res = await fetch(`/api/projects/${id}/notify-client`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data.error || "Failed to send completion email to the client."
+        );
+      }
+
+      const updatedProject = await res.json();
+
+      setProject(updatedProject);
+      setSelectedStaffId(updatedProject.staff?.id || "");
+      setNotifyEmail(
+        updatedProject.completionNotificationEmail ||
+          updatedProject.client.email ||
+          ""
+      );
+      setNotifyCc(updatedProject.completionNotificationCc || "");
+      setNotifySuccess("Email sent to the client successfully.");
+      setTimeout(() => setNotifySuccess(null), 5000);
+    } catch (e: any) {
+      setNotifyError(e.message || "Failed to send completion email.");
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="drive-container p-8">
@@ -435,6 +536,15 @@ export default function ProjectDetailPage({
     }
   };
 
+  const formatDateTime = (value: string | null | undefined) => {
+    if (!value) return null;
+    try {
+      return new Date(value).toLocaleString();
+    } catch (error) {
+      return value;
+    }
+  };
+
   const getFileIcon = (type: string, contentType?: string) => {
     if (type === "IMAGE" || contentType?.startsWith("image/")) {
       return (
@@ -462,6 +572,11 @@ export default function ProjectDetailPage({
     );
   };
 
+  const submittedAtLabel = formatDateTime(project.completionSubmittedAt);
+  const notifiedAtLabel = formatDateTime(project.completionNotifiedAt);
+  const canSendEmail = project.status === "COMPLETED";
+  const currentFolder =
+    viewMode !== "all" ? folders.find((f) => f.id === viewMode) || null : null;
   return (
     <div className="drive-container">
       {/* Toolbar */}
@@ -509,6 +624,153 @@ export default function ProjectDetailPage({
 
       {/* Content */}
       <div className="p-6 max-w-[1800px] mx-auto space-y-6">
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="font-medium text-[#202124]">
+              Delivery Review & Notification
+            </h2>
+            <span className={getStatusBadgeClass(project.status)}>
+              {project.status.replace("_", " ")}
+            </span>
+          </div>
+          <div className="space-y-2 text-sm text-[#5f6368]">
+            <p>
+              Submission status:{" "}
+              {submittedAtLabel ? (
+                <>
+                  Received on {submittedAtLabel}
+                  {project.completionSubmittedBy && (
+                    <>
+                      {" "}
+                      by{" "}
+                      <span className="font-medium">
+                        {project.completionSubmittedBy.email}
+                      </span>
+                    </>
+                  )}
+                </>
+              ) : (
+                "Waiting for staff to submit final deliveries."
+              )}
+            </p>
+            <p>
+              Client notification:{" "}
+              {notifiedAtLabel ? (
+                <>
+                  Sent on {notifiedAtLabel}
+                  {project.completionNotifiedBy && (
+                    <>
+                      {" "}
+                      by{" "}
+                      <span className="font-medium">
+                        {project.completionNotifiedBy.email}
+                      </span>
+                    </>
+                  )}
+                </>
+              ) : (
+                "Not sent yet."
+              )}
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="block text-sm text-[#5f6368] mb-1">
+                Client email
+              </label>
+              <input
+                type="email"
+                value={notifyEmail}
+                onChange={(e) => setNotifyEmail(e.target.value)}
+                className="input"
+                placeholder="client@example.com"
+                disabled={sendingEmail}
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#5f6368] mb-1">
+                CC (optional, comma separated)
+              </label>
+              <input
+                type="text"
+                value={notifyCc}
+                onChange={(e) => setNotifyCc(e.target.value)}
+                className="input"
+                placeholder="team@alfatonics.com, partner@example.com"
+                disabled={sendingEmail}
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#5f6368] mb-1">
+                Login email (optional)
+              </label>
+              <input
+                type="email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                className="input"
+                placeholder={project?.client?.email || "client login email"}
+                disabled={sendingEmail}
+              />
+              <p className="text-xs text-[#5f6368] mt-1">
+                Leave blank to use the client’s registered email.
+              </p>
+            </div>
+            <div className="md:col-span-2 lg:col-span-3">
+              <label className="block text-sm text-[#5f6368] mb-1">
+                Temporary password (optional)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={loginPassword}
+                  onChange={(e) => {
+                    setLoginPassword(e.target.value);
+                  }}
+                  className="input flex-1"
+                  placeholder="Generate or enter a password to reset the client login"
+                  disabled={sendingEmail}
+                />
+                <button
+                  type="button"
+                  onClick={regenerateLoginPassword}
+                  className="btn-secondary whitespace-nowrap"
+                  disabled={sendingEmail}
+                >
+                  Generate
+                </button>
+              </div>
+              <p className="text-xs text-[#5f6368] mt-1">
+                Provide a password to reset the client’s login and include it in
+                the email.
+              </p>
+            </div>
+          </div>
+          {notifyError && (
+            <div className="text-sm text-red-600">{notifyError}</div>
+          )}
+          {notifySuccess && (
+            <div className="text-sm text-green-600">{notifySuccess}</div>
+          )}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <button
+              onClick={sendCompletionEmail}
+              disabled={!canSendEmail || sendingEmail}
+              className="btn-primary disabled:opacity-50"
+            >
+              {sendingEmail
+                ? "Sending..."
+                : notifiedAtLabel
+                ? "Resend Email"
+                : "Send Email to Client"}
+            </button>
+            {!canSendEmail && (
+              <p className="text-xs text-[#b91c1c]">
+                Mark the project as completed before sending the client email.
+              </p>
+            )}
+          </div>
+        </div>
         <div className="card">
           <h2 className="font-medium text-[#202124] mb-4">Assign Staff</h2>
           <div className="flex gap-3">
@@ -633,44 +895,62 @@ export default function ProjectDetailPage({
         )}
 
         <section>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-normal text-[#202124]">
-                {viewMode === "all" ? (
-                  <>
-                    Assets ({project.assets.filter((a) => !a.folderId).length})
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => setViewMode("all")}
-                      className="text-[#1a73e8] hover:underline mr-2"
+          {viewMode === "all" ? (
+            <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-normal text-[#202124]">
+                  Projects & Assets
+                </h2>
+                <p className="text-sm text-[#5f6368]">
+                  Browse folders to manage shared assets and final deliveries.
+                </p>
+              </div>
+              <div className="flex gap-2 items-center">
+                <div className="relative">
+                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#5f6368]">
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
                     >
-                      ← Back
-                    </button>
-                    {project.folders.find((f) => f.id === viewMode)?.name ||
-                      "Folder"}{" "}
-                    (
-                    {
-                      project.assets.filter((a) => a.folderId === viewMode)
-                        .length
-                    }
-                    )
-                  </>
-                )}
-              </h2>
-            </div>
-            <div className="flex gap-2">
-              {viewMode === "all" && (
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <path d="m21 21-4.35-4.35"></path>
+                    </svg>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Search folders..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10 pr-4 py-2 bg-white border border-[#dadce0] rounded-lg text-[#202124] placeholder-[#5f6368] focus:outline-none focus:border-[#1a73e8] focus:shadow-sm transition-all sm:w-64"
+                  />
+                </div>
                 <button
                   onClick={() => setShowCreateFolder(!showCreateFolder)}
-                  className="btn-secondary text-sm"
+                  className="btn-secondary text-sm whitespace-nowrap"
                 >
                   {showCreateFolder ? "Cancel" : "New Folder"}
                 </button>
-              )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setViewMode("all")}
+                  className="text-[#1a73e8] hover:underline text-sm"
+                >
+                  ← Back
+                </button>
+                <h2 className="text-xl font-normal text-[#202124]">
+                  {folders.find((f) => f.id === viewMode)?.name || "Folder"}
+                </h2>
+              </div>
+            </div>
+          )}
 
           {/* Create Folder Form */}
           {showCreateFolder && viewMode === "all" && (
@@ -703,70 +983,278 @@ export default function ProjectDetailPage({
             </div>
           )}
 
-          {/* Upload Form */}
-          <div className="card mb-4">
-            <h3 className="font-medium text-[#202124] mb-4">
-              Upload New Asset
-            </h3>
-            <div className="space-y-4">
-              {viewMode === "all" &&
-                (() => {
-                  const assetsFolders = project.folders.filter(
-                    (f) => f.type === "ASSETS"
-                  );
-                  if (assetsFolders.length === 0) {
-                    return (
-                      <div className="text-sm text-red-600">
-                        No Assets folder found. Please contact support.
+          {/* Folder Overview */}
+          {viewMode === "all" && (
+            <div className="space-y-6">
+              {folders.length === 0 && (
+                <div className="text-center py-12 text-[#5f6368]">
+                  No folders yet. Create a folder to organise project files.
+                </div>
+              )}
+
+              {(() => {
+                const filteredFolders = folders.filter((folder) => {
+                  if (!searchQuery.trim()) return true;
+                  return folder.name
+                    .toLowerCase()
+                    .includes(searchQuery.trim().toLowerCase());
+                });
+                const assetsFolder = filteredFolders.find(
+                  (f) => f.type === "ASSETS"
+                );
+                const deliverablesFolder = filteredFolders.find(
+                  (f) => f.type === "DELIVERABLES"
+                );
+                const projectFolders = filteredFolders.filter(
+                  (f) => f.type === "PROJECT"
+                );
+
+                return (
+                  <>
+                    {assetsFolder && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            className="text-[#5f6368]"
+                          >
+                            <path
+                              d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                          <h3 className="text-lg font-medium text-[#202124]">
+                            Shared Assets
+                          </h3>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          <div
+                            className="card group cursor-pointer"
+                            onClick={() => {
+                              setViewMode(assetsFolder.id);
+                              setSelectedFolderId(assetsFolder.id);
+                            }}
+                          >
+                            <div className="flex flex-col items-center text-center">
+                              <div className="mb-2">
+                                <svg
+                                  width="48"
+                                  height="48"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                >
+                                  <path
+                                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+                                    fill="#4285f4"
+                                  />
+                                </svg>
+                              </div>
+                              <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
+                                {assetsFolder.name}
+                              </h3>
+                              <div className="text-xs text-[#5f6368]">
+                                {assetsFolder._count.assets} file
+                                {assetsFolder._count.assets !== 1 ? "s" : ""}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    );
-                  }
-                  return (
-                    <div>
-                      <label className="block text-sm text-[#5f6368] mb-2">
-                        Upload to Assets Folder{" "}
-                        <span className="text-red-600">*</span>
-                      </label>
-                      <select
-                        value={selectedFolderId || assetsFolders[0]?.id || ""}
-                        onChange={(e) =>
-                          setSelectedFolderId(e.target.value || null)
-                        }
-                        className="input"
-                        required
-                      >
-                        {assetsFolders.map((folder) => (
-                          <option key={folder.id} value={folder.id}>
-                            {folder.name}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-[#5f6368] mt-1">
-                        Assets must be uploaded to the Assets folder.
-                      </p>
-                    </div>
-                  );
-                })()}
-              {viewMode !== "all" &&
-                (() => {
-                  const currentFolder = project.folders.find(
-                    (f) => f.id === viewMode
-                  );
-                  if (currentFolder?.type === "ASSETS") {
-                    return (
-                      <div className="text-sm text-[#5f6368]">
-                        Uploading to: <strong>{currentFolder.name}</strong>
+                    )}
+
+                    {deliverablesFolder && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            className="text-[#5f6368]"
+                          >
+                            <path
+                              d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                          <h3 className="text-lg font-medium text-[#202124]">
+                            Deliverables
+                          </h3>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          <div
+                            className="card group cursor-pointer"
+                            onClick={() => {
+                              setViewMode(deliverablesFolder.id);
+                              setSelectedFolderId(deliverablesFolder.id);
+                            }}
+                          >
+                            <div className="flex flex-col items-center text-center">
+                              <div className="mb-2">
+                                <svg
+                                  width="48"
+                                  height="48"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                >
+                                  <path
+                                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+                                    fill="#10b981"
+                                  />
+                                </svg>
+                              </div>
+                              <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
+                                {deliverablesFolder.name}
+                              </h3>
+                              <div className="text-xs text-[#5f6368]">
+                                {deliverablesFolder._count.deliveries} deliver
+                                {deliverablesFolder._count.deliveries !== 1
+                                  ? "ies"
+                                  : "y"}
+                              </div>
+                            </div>
+                          </div>
+
+                          {projectFolders.map((folder) => (
+                            <div key={folder.id} className="card group">
+                              {editingFolderId === folder.id ? (
+                                <div className="space-y-3">
+                                  <input
+                                    type="text"
+                                    value={editingFolderName}
+                                    onChange={(e) =>
+                                      setEditingFolderName(e.target.value)
+                                    }
+                                    className="input text-sm"
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        updateFolder(folder.id);
+                                      }
+                                      if (e.key === "Escape") {
+                                        setEditingFolderId(null);
+                                        setEditingFolderName("");
+                                      }
+                                    }}
+                                    autoFocus
+                                  />
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => updateFolder(folder.id)}
+                                      disabled={creatingFolder}
+                                      className="btn-primary text-xs disabled:opacity-50"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setEditingFolderId(null);
+                                        setEditingFolderName("");
+                                      }}
+                                      className="btn-secondary text-xs"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div
+                                    className="flex flex-col items-center text-center cursor-pointer"
+                                    onClick={() => {
+                                      setViewMode(folder.id);
+                                      setSelectedFolderId(folder.id);
+                                    }}
+                                  >
+                                    <div className="mb-2">
+                                      <svg
+                                        width="48"
+                                        height="48"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                      >
+                                        <path
+                                          d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+                                          fill="#fbbc04"
+                                        />
+                                      </svg>
+                                    </div>
+                                    <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
+                                      {folder.name}
+                                    </h3>
+                                    <div className="text-xs text-[#5f6368] space-y-0.5">
+                                      {folder._count.assets > 0 && (
+                                        <div>
+                                          {folder._count.assets} asset
+                                          {folder._count.assets !== 1
+                                            ? "s"
+                                            : ""}
+                                        </div>
+                                      )}
+                                      {folder._count.deliveries > 0 && (
+                                        <div>
+                                          {folder._count.deliveries} deliver
+                                          {folder._count.deliveries !== 1
+                                            ? "ies"
+                                            : "y"}
+                                        </div>
+                                      )}
+                                      {folder._count.assets === 0 &&
+                                        folder._count.deliveries === 0 && (
+                                          <div>Empty</div>
+                                        )}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2 justify-center mt-3">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingFolderId(folder.id);
+                                        setEditingFolderName(folder.name);
+                                      }}
+                                      className="px-2 py-1 text-xs btn-secondary"
+                                      title="Rename folder"
+                                    >
+                                      Rename
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteFolder(folder.id);
+                                      }}
+                                      disabled={deletingFolderId === folder.id}
+                                      className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                                      title="Delete folder"
+                                    >
+                                      {deletingFolderId === folder.id
+                                        ? "Deleting..."
+                                        : "Delete"}
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    );
-                  } else {
-                    return (
-                      <div className="text-sm text-red-600">
-                        Assets can only be uploaded to Assets folders. Please go
-                        back and select an Assets folder.
-                      </div>
-                    );
-                  }
-                })()}
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {currentFolder?.type === "ASSETS" && (
+            <div className="card mb-4 space-y-4">
+              <div className="text-sm text-[#5f6368]">
+                Uploading to: <strong>{currentFolder.name}</strong>
+              </div>
               <div>
                 <input
                   type="file"
@@ -789,293 +1277,170 @@ export default function ProjectDetailPage({
                 {uploading ? "Uploading..." : "Upload Asset"}
               </button>
             </div>
-          </div>
+          )}
 
-          {/* Folders Grid */}
-          {viewMode === "all" && project.folders.length > 0 && (
-            <div className="mb-8">
-              <div className="flex items-center gap-2 mb-4">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  className="text-[#5f6368]"
-                >
-                  <path
-                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                    fill="currentColor"
-                  />
-                </svg>
-                <h3 className="text-lg font-medium text-[#202124]">
-                  Folders ({project.folders.length})
-                </h3>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                {project.folders.map((folder) => (
-                  <div key={folder.id} className="card group">
-                    {editingFolderId === folder.id ? (
-                      <div className="space-y-3">
-                        <input
-                          type="text"
-                          value={editingFolderName}
-                          onChange={(e) => setEditingFolderName(e.target.value)}
-                          className="input text-sm"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              updateFolder(folder.id);
-                            }
-                            if (e.key === "Escape") {
-                              setEditingFolderId(null);
-                              setEditingFolderName("");
-                            }
-                          }}
-                          autoFocus
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => updateFolder(folder.id)}
-                            disabled={creatingFolder}
-                            className="btn-primary text-xs disabled:opacity-50"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => {
-                              setEditingFolderId(null);
-                              setEditingFolderName("");
-                            }}
-                            className="btn-secondary text-xs"
-                          >
-                            Cancel
-                          </button>
+          {viewMode !== "all" && currentFolder?.type === "ASSETS" && (
+            <div>
+              {(() => {
+                const folderAssets = project.assets.filter(
+                  (a) => a.folderId === currentFolder.id
+                );
+                if (folderAssets.length === 0) {
+                  return (
+                    <div className="text-center py-12 text-[#5f6368]">
+                      No assets in this folder yet.
+                    </div>
+                  );
+                }
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
+                    {folderAssets.map((asset) => {
+                      const canDelete =
+                        currentUser?.role === "ADMIN" ||
+                        asset.uploadedBy?.id === currentUser?.id;
+                      const canView =
+                        asset.type === "IMAGE" ||
+                        asset.type === "AUDIO" ||
+                        asset.contentType?.startsWith("image/") ||
+                        asset.contentType?.startsWith("audio/") ||
+                        asset.contentType?.startsWith("video/");
+
+                      return (
+                        <div key={asset.id} className="card group">
+                          <div className="flex flex-col items-center text-center mb-3">
+                            <div className="mb-2">
+                              {getFileIcon(asset.type, asset.contentType)}
+                            </div>
+                            <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
+                              {asset.filename}
+                            </h3>
+                            <div className="text-xs text-[#5f6368] mb-1">
+                              {asset.type} •{" "}
+                              {(asset.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                            </div>
+                            {asset.uploadedBy && (
+                              <div
+                                className="text-xs text-[#80868b] truncate w-full"
+                                title={asset.uploadedBy.email}
+                              >
+                                {asset.uploadedBy.email}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex gap-2 justify-center flex-wrap">
+                            {canView && (
+                              <Link
+                                href={`/api/assets/${asset.id}/stream`}
+                                target="_blank"
+                                className="px-3 py-1.5 btn-primary text-xs no-underline"
+                              >
+                                View
+                              </Link>
+                            )}
+                            <Link
+                              href={`/api/assets/${asset.id}/download`}
+                              className="px-3 py-1.5 btn-secondary text-xs no-underline"
+                            >
+                              Download
+                            </Link>
+                            {canDelete && (
+                              <button
+                                onClick={() => deleteAsset(asset.id)}
+                                disabled={deletingAssetId === asset.id}
+                                className="px-3 py-1.5 bg-red-600 text-white rounded text-xs disabled:opacity-50 border-none cursor-pointer hover:bg-red-700"
+                              >
+                                {deletingAssetId === asset.id
+                                  ? "Deleting..."
+                                  : "Delete"}
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div
-                          className="flex flex-col items-center text-center cursor-pointer"
-                          onClick={() => setViewMode(folder.id)}
-                        >
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </section>
+
+        <section>
+          {currentFolder &&
+          (currentFolder.type === "DELIVERABLES" ||
+            currentFolder.type === "PROJECT") ? (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-normal text-[#202124]">
+                  Deliveries in {currentFolder.name}
+                </h2>
+                <button
+                  onClick={() => setViewMode("all")}
+                  className="text-[#1a73e8] hover:underline text-sm"
+                >
+                  View all folders
+                </button>
+              </div>
+              {(() => {
+                const folderDeliveries = project.deliveries.filter(
+                  (d) => d.folderId === currentFolder.id
+                );
+                return folderDeliveries.length === 0 ? (
+                  <div className="text-center py-12 text-[#5f6368]">
+                    No deliveries in this folder yet.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {folderDeliveries.map((delivery) => (
+                      <div key={delivery.id} className="card group">
+                        <div className="flex flex-col items-center text-center mb-3">
                           <div className="mb-2">
                             <svg
-                              width="48"
-                              height="48"
+                              width="40"
+                              height="40"
                               viewBox="0 0 24 24"
-                              fill="none"
-                              xmlns="http://www.w3.org/2000/svg"
+                              fill="#ea4335"
                             >
-                              <path
-                                d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                fill="#fbbc04"
-                              />
+                              <path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z" />
                             </svg>
                           </div>
                           <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                            {folder.name}
-                          </h3>
-                          <div className="text-xs text-[#5f6368]">
-                            {folder._count.assets} file
-                            {folder._count.assets !== 1 ? "s" : ""}
-                          </div>
-                        </div>
-                        <div className="flex gap-2 justify-center mt-3">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingFolderId(folder.id);
-                              setEditingFolderName(folder.name);
-                            }}
-                            className="px-2 py-1 text-xs btn-secondary"
-                            title="Rename folder"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteFolder(folder.id);
-                            }}
-                            disabled={deletingFolderId === folder.id}
-                            className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
-                            title="Delete folder"
-                          >
-                            {deletingFolderId === folder.id
-                              ? "Deleting..."
-                              : "Delete"}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Assets Grid */}
-          {(() => {
-            const displayedAssets =
-              viewMode === "all"
-                ? project.assets.filter((a) => !a.folderId)
-                : project.assets.filter((a) => a.folderId === viewMode);
-
-            return displayedAssets.length === 0 ? (
-              <div className="text-center py-12 text-[#5f6368]">
-                {viewMode === "all"
-                  ? "No assets in root folder. Create a folder or upload files."
-                  : "No assets in this folder yet."}
-              </div>
-            ) : (
-              <>
-                {viewMode === "all" && project.folders.length > 0 && (
-                  <div className="flex items-center gap-2 mb-4 mt-6">
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      className="text-[#5f6368]"
-                    >
-                      <path
-                        d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"
-                        fill="currentColor"
-                      />
-                    </svg>
-                    <h3 className="text-lg font-medium text-[#202124]">
-                      Files ({displayedAssets.length})
-                    </h3>
-                  </div>
-                )}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                  {displayedAssets.map((asset) => {
-                    const canDelete =
-                      currentUser?.role === "ADMIN" ||
-                      asset.uploadedBy?.id === currentUser?.id;
-                    const canView =
-                      asset.type === "IMAGE" ||
-                      asset.type === "AUDIO" ||
-                      asset.contentType?.startsWith("image/") ||
-                      asset.contentType?.startsWith("audio/") ||
-                      asset.contentType?.startsWith("video/");
-
-                    return (
-                      <div key={asset.id} className="card group">
-                        <div className="flex flex-col items-center text-center mb-3">
-                          <div className="mb-2">
-                            {getFileIcon(asset.type, asset.contentType)}
-                          </div>
-                          <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                            {asset.filename}
+                            {delivery.filename}
                           </h3>
                           <div className="text-xs text-[#5f6368] mb-1">
-                            {asset.type} •{" "}
-                            {(asset.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                            {(delivery.sizeBytes / (1024 * 1024)).toFixed(1)} MB
                           </div>
-                          {asset.uploadedBy && (
-                            <div
-                              className="text-xs text-[#80868b] truncate w-full"
-                              title={asset.uploadedBy.email}
-                            >
-                              {asset.uploadedBy.email}
-                            </div>
-                          )}
+                          <div
+                            className="text-xs text-[#80868b] truncate w-full"
+                            title={delivery.uploadedBy.email}
+                          >
+                            {delivery.uploadedBy.email}
+                          </div>
+                          <div className="text-xs text-[#80868b] mt-1">
+                            {new Date(delivery.createdAt).toLocaleDateString()}
+                          </div>
                         </div>
-                        <div className="flex gap-2 justify-center flex-wrap">
-                          {canView && (
-                            <Link
-                              href={`/api/assets/${asset.id}/stream`}
-                              target="_blank"
-                              className="px-3 py-1.5 btn-primary text-xs no-underline"
-                            >
-                              View
-                            </Link>
-                          )}
+                        <div className="flex gap-2 justify-center">
                           <Link
-                            href={`/api/assets/${asset.id}/download`}
+                            href={`/api/deliveries/${delivery.id}/stream`}
+                            className="px-3 py-1.5 btn-primary text-xs no-underline"
+                          >
+                            Watch
+                          </Link>
+                          <Link
+                            href={`/api/deliveries/${delivery.id}/download`}
                             className="px-3 py-1.5 btn-secondary text-xs no-underline"
                           >
                             Download
                           </Link>
-                          {canDelete && (
-                            <button
-                              onClick={() => deleteAsset(asset.id)}
-                              disabled={deletingAssetId === asset.id}
-                              className="px-3 py-1.5 bg-red-600 text-white rounded text-xs disabled:opacity-50 border-none cursor-pointer hover:bg-red-700"
-                            >
-                              {deletingAssetId === asset.id
-                                ? "Deleting..."
-                                : "Delete"}
-                            </button>
-                          )}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            );
-          })()}
-        </section>
-
-        <section>
-          <h2 className="text-xl font-normal text-[#202124] mb-4">
-            Deliveries ({project.deliveries.length})
-          </h2>
-          {project.deliveries.length === 0 ? (
-            <div className="text-center py-12 text-[#5f6368]">
-              No deliveries yet
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {project.deliveries.map((delivery) => (
-                <div key={delivery.id} className="card group">
-                  <div className="flex flex-col items-center text-center mb-3">
-                    <div className="mb-2">
-                      <svg
-                        width="40"
-                        height="40"
-                        viewBox="0 0 24 24"
-                        fill="#ea4335"
-                      >
-                        <path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z" />
-                      </svg>
-                    </div>
-                    <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                      {delivery.filename}
-                    </h3>
-                    <div className="text-xs text-[#5f6368] mb-1">
-                      {(delivery.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                    </div>
-                    <div
-                      className="text-xs text-[#80868b] truncate w-full"
-                      title={delivery.uploadedBy.email}
-                    >
-                      {delivery.uploadedBy.email}
-                    </div>
-                    <div className="text-xs text-[#80868b] mt-1">
-                      {new Date(delivery.createdAt).toLocaleDateString()}
-                    </div>
+                    ))}
                   </div>
-                  <div className="flex gap-2 justify-center">
-                    <Link
-                      href={`/api/deliveries/${delivery.id}/stream`}
-                      className="px-3 py-1.5 btn-primary text-xs no-underline"
-                    >
-                      Watch
-                    </Link>
-                    <Link
-                      href={`/api/deliveries/${delivery.id}/download`}
-                      className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                    >
-                      Download
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                );
+              })()}
+            </>
+          ) : null}
         </section>
       </div>
     </div>

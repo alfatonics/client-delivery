@@ -288,6 +288,41 @@ export default function ClientProjectPage({
     );
   };
 
+  const isImageFile = (contentType: string, filename: string): boolean => {
+    const imageTypes = ["image/"];
+    const imageExtensions = [
+      ".jpg",
+      ".jpeg",
+      ".png",
+      ".gif",
+      ".webp",
+      ".svg",
+      ".bmp",
+      ".ico",
+    ];
+    return (
+      contentType.toLowerCase().startsWith("image/") ||
+      imageExtensions.some((ext) => filename.toLowerCase().endsWith(ext))
+    );
+  };
+
+  const isVideoFile = (contentType: string, filename: string): boolean => {
+    const videoTypes = ["video/"];
+    const videoExtensions = [
+      ".mp4",
+      ".avi",
+      ".mov",
+      ".wmv",
+      ".flv",
+      ".webm",
+      ".mkv",
+    ];
+    return (
+      videoTypes.some((type) => contentType.toLowerCase().includes(type)) ||
+      videoExtensions.some((ext) => filename.toLowerCase().endsWith(ext))
+    );
+  };
+
   return (
     <div className="drive-container">
       {/* Toolbar */}
@@ -733,32 +768,63 @@ export default function ClientProjectPage({
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                          {filteredDeliveries.map((delivery) => (
-                            <div key={delivery.id} className="card group">
-                              <div className="flex flex-col items-center text-center mb-3">
-                                <div className="mb-2">
-                                  {getFileIcon("OTHER", delivery.contentType)}
+                          {filteredDeliveries.map((delivery) => {
+                            const imageFile = isImageFile(
+                              delivery.contentType,
+                              delivery.filename
+                            );
+                            const videoFile = isVideoFile(
+                              delivery.contentType,
+                              delivery.filename
+                            );
+                            const icon = getFileIcon(
+                              imageFile ? "IMAGE" : "OTHER",
+                              delivery.contentType
+                            );
+
+                            return (
+                              <div key={delivery.id} className="card group">
+                                <div className="flex flex-col items-center text-center mb-3">
+                                  <div className="mb-2">{icon}</div>
+                                  <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
+                                    {delivery.filename}
+                                  </h3>
+                                  <div className="text-xs text-[#5f6368] mb-1">
+                                    {(
+                                      delivery.sizeBytes /
+                                      (1024 * 1024)
+                                    ).toFixed(1)}{" "}
+                                    MB
+                                  </div>
                                 </div>
-                                <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                  {delivery.filename}
-                                </h3>
-                                <div className="text-xs text-[#5f6368] mb-1">
-                                  {(delivery.sizeBytes / (1024 * 1024)).toFixed(
-                                    1
-                                  )}{" "}
-                                  MB
+                                <div className="flex gap-2 justify-center flex-wrap">
+                                  {videoFile && (
+                                    <Link
+                                      href={`/api/deliveries/${delivery.id}/stream`}
+                                      className="px-3 py-1.5 btn-primary text-xs no-underline"
+                                    >
+                                      Watch
+                                    </Link>
+                                  )}
+                                  {imageFile && (
+                                    <Link
+                                      href={`/api/deliveries/${delivery.id}/stream`}
+                                      target="_blank"
+                                      className="px-3 py-1.5 btn-primary text-xs no-underline"
+                                    >
+                                      View
+                                    </Link>
+                                  )}
+                                  <Link
+                                    href={`/api/deliveries/${delivery.id}/download`}
+                                    className="px-3 py-1.5 btn-secondary text-xs no-underline"
+                                  >
+                                    Download
+                                  </Link>
                                 </div>
                               </div>
-                              <div className="flex gap-2 justify-center flex-wrap">
-                                <Link
-                                  href={`/api/deliveries/${delivery.id}/download`}
-                                  className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                                >
-                                  Download
-                                </Link>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>

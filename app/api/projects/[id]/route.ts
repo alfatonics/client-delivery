@@ -31,6 +31,12 @@ export async function GET(
         createdBy: {
           select: { id: true, email: true, name: true, role: true },
         },
+        completionSubmittedBy: {
+          select: { id: true, email: true, name: true, role: true },
+        },
+        completionNotifiedBy: {
+          select: { id: true, email: true, name: true, role: true },
+        },
         assets: {
           include: {
             uploadedBy: { select: { id: true, email: true, name: true } },
@@ -96,6 +102,12 @@ export async function GET(
           client: { select: { id: true, email: true, name: true } },
           staff: { select: { id: true, email: true, name: true } },
           createdBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          completionSubmittedBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          completionNotifiedBy: {
             select: { id: true, email: true, name: true, role: true },
           },
           assets: {
@@ -167,6 +179,11 @@ export async function PATCH(
 
     const project = await prisma.project.findUnique({
       where: { id },
+      include: {
+        client: { select: { id: true, email: true, name: true } },
+        staff: { select: { id: true } },
+        _count: { select: { deliveries: true } },
+      },
     });
 
     if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -179,20 +196,92 @@ export async function PATCH(
       return new NextResponse("Forbidden", { status: 403 });
     }
 
+    const updateData: Prisma.ProjectUpdateInput = {};
+
+    if (parsed.title !== undefined) {
+      updateData.title = parsed.title;
+    }
+    if (parsed.description !== undefined) {
+      updateData.description = parsed.description;
+    }
+    if (parsed.staffId !== undefined) {
+      if (role !== "ADMIN" && parsed.staffId !== project.staff?.id) {
+        return new NextResponse("Forbidden", { status: 403 });
+      }
+      updateData.staff =
+        parsed.staffId === null
+          ? { disconnect: true }
+          : { connect: { id: parsed.staffId } };
+      if (parsed.staffId === null && role !== "ADMIN") {
+        return new NextResponse("Forbidden", { status: 403 });
+      }
+    }
+
+    if (parsed.status !== undefined) {
+      if (
+        parsed.status === "COMPLETED" &&
+        role === "STAFF" &&
+        project._count.deliveries === 0
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "You must upload at least one delivery before marking the project as completed.",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.status = parsed.status;
+
+      if (parsed.status === "COMPLETED") {
+        updateData.completionSubmittedAt = new Date();
+        updateData.completionSubmittedBy = { connect: { id: userId } };
+      } else {
+        updateData.completionSubmittedAt = null;
+        updateData.completionSubmittedBy = { disconnect: true };
+        updateData.completionNotifiedAt = null;
+        updateData.completionNotifiedBy = { disconnect: true };
+        updateData.completionNotificationEmail = null;
+        updateData.completionNotificationCc = null;
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      const unchangedProject = await prisma.project.findUnique({
+        where: { id },
+        include: {
+          client: { select: { id: true, email: true, name: true } },
+          staff: { select: { id: true, email: true, name: true } },
+          createdBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          completionSubmittedBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          completionNotifiedBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          assets: true,
+          deliveries: true,
+        },
+      });
+      return NextResponse.json(unchangedProject);
+    }
+
     const updated = await prisma.project.update({
       where: { id },
-      data: {
-        ...(parsed.title !== undefined && { title: parsed.title }),
-        ...(parsed.description !== undefined && {
-          description: parsed.description,
-        }),
-        ...(parsed.status !== undefined && { status: parsed.status }),
-        ...(parsed.staffId !== undefined && { staffId: parsed.staffId }),
-      },
+      data: updateData,
       include: {
         client: { select: { id: true, email: true, name: true } },
         staff: { select: { id: true, email: true, name: true } },
         createdBy: {
+          select: { id: true, email: true, name: true, role: true },
+        },
+        completionSubmittedBy: {
+          select: { id: true, email: true, name: true, role: true },
+        },
+        completionNotifiedBy: {
           select: { id: true, email: true, name: true, role: true },
         },
         assets: true,

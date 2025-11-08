@@ -3,11 +3,13 @@ import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { hash } from "bcryptjs";
 import { z } from "zod";
+import { sendUserCredentialsEmail } from "@/app/lib/email";
+import { generateFriendlyPassword } from "@/app/lib/password";
 
 const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().optional(),
-  password: z.string().min(6),
+  password: z.string().min(6).optional(),
   role: z.enum(["ADMIN", "STAFF", "CLIENT"]),
 });
 
@@ -54,7 +56,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const passwordHash = await hash(parsed.password, 10);
+    const password =
+      parsed.password ||
+      generateFriendlyPassword(parsed.email, parsed.name ?? null);
+    const passwordHash = await hash(password, 10);
 
     const user = await prisma.user.create({
       data: {
@@ -72,6 +77,18 @@ export async function POST(req: Request) {
         createdAt: true,
       },
     });
+
+    try {
+      await sendUserCredentialsEmail({
+        to: user.email,
+        name: user.name,
+        role: user.role,
+        email: user.email,
+        password,
+      });
+    } catch (emailError) {
+      console.error("Failed to send credentials email:", emailError);
+    }
 
     return NextResponse.json(user, { status: 201 });
   } catch (error: any) {

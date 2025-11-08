@@ -1,6 +1,7 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function SignInPage() {
@@ -8,6 +9,25 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const [showPassword, setShowPassword] = useState(false);
+
+  const EyeIcon = ({ open }: { open: boolean }) => (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="w-5 h-5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2.25 12c1.5-3 5.5-7.5 9.75-7.5s8.25 4.5 9.75 7.5c-1.5 3-5.5 7.5-9.75 7.5S3.75 15 2.25 12z" />
+      <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      {!open && <path d="M3 3l18 18" />}
+    </svg>
+  );
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,10 +36,18 @@ export default function SignInPage() {
     const res = await signIn("credentials", {
       email,
       password,
-      redirect: true,
+      redirect: false,
       callbackUrl: "/",
     });
-    if (!res?.ok) setError("Invalid credentials");
+
+    if (res?.error) {
+      setError("Invalid credentials");
+      setLoading(false);
+      return;
+    }
+
+    const target = res?.url ?? "/";
+    router.replace(target);
     setLoading(false);
   };
 
@@ -54,14 +82,24 @@ export default function SignInPage() {
               />
             </div>
             <div>
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input pr-12"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-[#3c5495] hover:text-[#e98923]"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  <EyeIcon open={showPassword} />
+                </button>
+              </div>
             </div>
             {error && <p className="text-red-600 text-sm">{error}</p>}
             <button

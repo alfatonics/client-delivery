@@ -3,6 +3,19 @@ import { prisma } from "@/app/lib/prisma";
 import Link from "next/link";
 import ClientLink from "@/app/components/ClientLink";
 
+const formatDate = (value?: Date | null) => {
+  if (!value) return null;
+  try {
+    return value.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return value.toISOString().split("T")[0];
+  }
+};
+
 export default async function AdminPage() {
   const session = await auth();
   if (!session || (session.user as any)?.role !== "ADMIN") return null;
@@ -170,6 +183,20 @@ export default async function AdminPage() {
                       <span>{project.assets.length} assets</span>
                       <span>{project.deliveries.length} deliveries</span>
                     </div>
+                    {project.status === "COMPLETED" && (
+                      <div className="mt-2 text-xs">
+                        {project.completionNotifiedAt ? (
+                          <span className="text-[#0f766e] font-medium">
+                            Email sent{" "}
+                            {formatDate(project.completionNotifiedAt)}
+                          </span>
+                        ) : (
+                          <span className="text-[#b45309]">
+                            Awaiting client email
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </Link>
                   {project.status === "COMPLETED" && (
                     <ClientLink projectId={project.id} />

@@ -102,10 +102,17 @@ export default async function Navbar() {
               <span className="sm:hidden">Sign in</span>
             </Link>
           ) : (
-            <div className="flex items-center gap-1 sm:gap-2">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[#1a73e8] flex items-center justify-center text-white font-medium text-xs sm:text-sm">
+            <div className="flex items-center gap-1 sm:gap-3">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[#3c5495] flex items-center justify-center text-white font-medium text-xs sm:text-sm">
                 {user?.email?.charAt(0).toUpperCase() || "U"}
               </div>
+              <Link
+                href="/profile"
+                className="px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium text-[#3c5495] border border-[#3c5495] rounded-lg hover:bg-[#3c5495] hover:text-white transition-colors no-underline"
+                title="Profile"
+              >
+                Profile
+              </Link>
               <Link
                 href="/auth/signout"
                 className="px-2 sm:px-4 py-2 text-[#5f6368] hover:bg-[#f1f3f4] rounded-lg transition-colors text-xs sm:text-sm font-medium no-underline"

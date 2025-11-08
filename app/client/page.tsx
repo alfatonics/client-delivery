@@ -92,7 +92,7 @@ export default function ClientDashboard() {
       <div className="bg-white border-b border-[#dadce0] px-4 sm:px-6 py-3 sm:py-4">
         <div className="flex items-center justify-between max-w-[1800px] mx-auto gap-3">
           <h1 className="text-xl sm:text-2xl font-normal text-[#202124]">
-            My Customers
+            My Projects
           </h1>
           <Link
             href="/client/projects/new"

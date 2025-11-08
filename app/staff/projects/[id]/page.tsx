@@ -44,6 +44,8 @@ type Project = {
   assets: Asset[];
   deliveries: Delivery[];
   folders: Folder[];
+  completionSubmittedAt: string | null;
+  completionNotifiedAt: string | null;
 };
 
 export default function StaffProjectPage({
@@ -78,6 +80,9 @@ export default function StaffProjectPage({
   const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"all" | string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
   // Helper function to check if file is an image
   const isImage = (contentType: string, filename: string): boolean => {
@@ -114,6 +119,15 @@ export default function StaffProjectPage({
       videoTypes.some((type) => contentType.toLowerCase().includes(type)) ||
       videoExtensions.some((ext) => filename.toLowerCase().endsWith(ext))
     );
+  };
+
+  const formatDateTime = (value: string | null | undefined) => {
+    if (!value) return null;
+    try {
+      return new Date(value).toLocaleString();
+    } catch (error) {
+      return value;
+    }
   };
 
   useEffect(() => {
@@ -554,6 +568,8 @@ export default function StaffProjectPage({
   const updateStatus = async (
     status: "PENDING" | "IN_PROGRESS" | "COMPLETED"
   ) => {
+    setSubmitError(null);
+    setSubmitSuccess(null);
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: "PATCH",
@@ -564,6 +580,31 @@ export default function StaffProjectPage({
       await fetchProject();
     } catch (e: any) {
       setError(e.message);
+    }
+  };
+
+  const submitProject = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/submit`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data.error || "Failed to submit project for admin review."
+        );
+      }
+      await fetchProject();
+      setSubmitSuccess("Deliveries submitted to the admin for review.");
+      setTimeout(() => setSubmitSuccess(null), 5000);
+    } catch (e: any) {
+      setSubmitError(e.message || "Failed to submit project for review.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -584,6 +625,11 @@ export default function StaffProjectPage({
       </div>
     );
   }
+
+  const deliveriesCount = project.deliveries.length;
+  const hasDeliveries = deliveriesCount > 0;
+  const submittedAtLabel = formatDateTime(project.completionSubmittedAt);
+  const notifiedAtLabel = formatDateTime(project.completionNotifiedAt);
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
@@ -628,7 +674,7 @@ export default function StaffProjectPage({
       {/* Toolbar */}
       <div className="bg-white border-b border-[#dadce0] px-6 py-4">
         <div className="flex items-center justify-between max-w-[1800px] mx-auto">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <Link href="/staff" className="btn-icon" title="Back">
               <svg
                 width="24"
@@ -650,14 +696,23 @@ export default function StaffProjectPage({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap justify-end">
             <span className={getStatusBadgeClass(project.status)}>
               {project.status.replace("_", " ")}
             </span>
+            {project.status !== "COMPLETED" && (
+              <button
+                onClick={submitProject}
+                disabled={submitting || !hasDeliveries}
+                className="btn-primary text-sm disabled:opacity-60"
+              >
+                {submitting ? "Submitting..." : "Submit Deliveries"}
+              </button>
+            )}
             {project.status !== "IN_PROGRESS" && (
               <button
                 onClick={() => updateStatus("IN_PROGRESS")}
-                className="btn-primary text-sm"
+                className="btn-secondary text-sm"
               >
                 Mark In Progress
               </button>
@@ -668,6 +723,39 @@ export default function StaffProjectPage({
 
       {/* Content */}
       <div className="p-6 max-w-[1800px] mx-auto space-y-6">
+        {!hasDeliveries && project.status !== "COMPLETED" && (
+          <div className="card bg-yellow-50 border-yellow-200 text-[#92400e]">
+            Upload at least one delivery before submitting the project to the
+            admin.
+          </div>
+        )}
+        {submitError && (
+          <div className="card bg-red-50 border-red-200 text-red-600">
+            {submitError}
+          </div>
+        )}
+        {submitSuccess && (
+          <div className="card bg-green-50 border-green-200 text-green-700">
+            {submitSuccess}
+          </div>
+        )}
+        {submittedAtLabel && (
+          <div className="card bg-blue-50 border-blue-200 text-[#1e3a8a] space-y-1">
+            <p className="font-medium">
+              Submitted for admin review on {submittedAtLabel}
+            </p>
+            {notifiedAtLabel ? (
+              <p className="text-sm">
+                Client email sent on {notifiedAtLabel}. If adjustments are
+                required, contact the admin team.
+              </p>
+            ) : (
+              <p className="text-sm">
+                Waiting for the admin to review and notify the client.
+              </p>
+            )}
+          </div>
+        )}
         {project.description && (
           <div className="card">
             <h2 className="font-medium text-[#202124] mb-2">Description</h2>

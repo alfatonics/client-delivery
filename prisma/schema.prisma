@@ -52,6 +52,8 @@ model User {
   clientProjects Project[] @relation("ClientProjects")
   staffProjects  Project[] @relation("StaffProjects")
   createdProjects Project[] @relation("ProjectCreator") // Projects aliye-unda
+  submittedProjects Project[] @relation("ProjectSubmission")
+  notifiedProjects  Project[] @relation("ProjectNotification")
   deliveries    Delivery[] @relation("Deliveries")
   assets        Asset[]   @relation("AssetUploads")
   videos        Video[]   @relation("UserVideos") // Legacy videos
@@ -68,6 +70,14 @@ model Project {
   staff       User?         @relation("StaffProjects", fields: [staffId], references: [id])
   createdById String?       // User aliye-unda project (ADMIN, STAFF, au CLIENT)
   createdBy   User?         @relation("ProjectCreator", fields: [createdById], references: [id])
+  completionSubmittedAt DateTime?
+  completionSubmittedById String?
+  completionSubmittedBy   User?   @relation("ProjectSubmission", fields: [completionSubmittedById], references: [id])
+  completionNotifiedAt    DateTime?
+  completionNotifiedById  String?
+  completionNotifiedBy    User?   @relation("ProjectNotification", fields: [completionNotifiedById], references: [id])
+  completionNotificationEmail String?
+  completionNotificationCc    String?
   assets      Asset[]
   deliveries  Delivery[]
   folders     Folder[]

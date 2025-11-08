@@ -78,24 +78,18 @@ export async function POST(
     );
 
     // Save delivery record and update project status
-    await prisma.$transaction([
-      prisma.delivery.create({
-        data: {
-          key,
-          filename:
-            filename || decodeURIComponent(key.split("-").slice(1).join("-")),
-          contentType: contentType || "video/mp4",
-          sizeBytes: sizeBytes || 0,
-          projectId: id,
-          folderId: folderId || null,
-          uploadedById: userId,
-        },
-      }),
-      prisma.project.update({
-        where: { id },
-        data: { status: "COMPLETED" },
-      }),
-    ]);
+    await prisma.delivery.create({
+      data: {
+        key,
+        filename:
+          filename || decodeURIComponent(key.split("-").slice(1).join("-")),
+        contentType: contentType || "video/mp4",
+        sizeBytes: sizeBytes || 0,
+        projectId: id,
+        folderId: folderId || null,
+        uploadedById: userId,
+      },
+    });
 
     return NextResponse.json({ ok: true, location: result.Location });
   } catch (error: any) {
