@@ -3,16 +3,18 @@ import { prisma } from "@/app/lib/prisma";
 import Link from "next/link";
 import ClientLink from "@/app/components/ClientLink";
 
-const formatDate = (value?: Date | null) => {
+const formatDate = (value?: Date | string | null) => {
   if (!value) return null;
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
   try {
-    return value.toLocaleDateString(undefined, {
+    return date.toLocaleDateString(undefined, {
       year: "numeric",
       month: "short",
       day: "numeric",
     });
   } catch {
-    return value.toISOString().split("T")[0];
+    return date.toISOString().split("T")[0];
   }
 };
 
