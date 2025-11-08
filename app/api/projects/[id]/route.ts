@@ -255,16 +255,10 @@ export async function PATCH(
         where: { id },
         include: {
           client: { select: { id: true, email: true, name: true } },
-          staff: { select: { id: true, email: true, name: true } },
-          createdBy: {
-            select: { id: true, email: true, name: true, role: true },
-          },
-          completionSubmittedBy: {
-            select: { id: true, email: true, name: true, role: true },
-          },
-          completionNotifiedBy: {
-            select: { id: true, email: true, name: true, role: true },
-          },
+        staff: { select: { id: true, email: true, name: true } },
+        createdBy: {
+          select: { id: true, email: true, name: true, role: true },
+        },
           assets: true,
           deliveries: true,
         },
