@@ -183,20 +183,21 @@ export default async function AdminPage() {
                       <span>{project.assets.length} assets</span>
                       <span>{project.deliveries.length} deliveries</span>
                     </div>
-                    {project.status === "COMPLETED" && (
-                      <div className="mt-2 text-xs">
-                        {project.completionNotifiedAt ? (
-                          <span className="text-[#0f766e] font-medium">
-                            Email sent{" "}
-                            {formatDate(project.completionNotifiedAt)}
-                          </span>
-                        ) : (
-                          <span className="text-[#b45309]">
-                            Awaiting client email
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    {"completionNotifiedAt" in project &&
+                      project.status === "COMPLETED" && (
+                        <div className="mt-2 text-xs">
+                          {project.completionNotifiedAt ? (
+                            <span className="text-[#0f766e] font-medium">
+                              Email sent{" "}
+                              {formatDate(project.completionNotifiedAt)}
+                            </span>
+                          ) : (
+                            <span className="text-[#b45309]">
+                              Awaiting client email
+                            </span>
+                          )}
+                        </div>
+                      )}
                   </Link>
                   {project.status === "COMPLETED" && (
                     <ClientLink projectId={project.id} />
