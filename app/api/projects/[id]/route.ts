@@ -281,12 +281,6 @@ export async function PATCH(
         createdBy: {
           select: { id: true, email: true, name: true, role: true },
         },
-        completionSubmittedBy: {
-          select: { id: true, email: true, name: true, role: true },
-        },
-        completionNotifiedBy: {
-          select: { id: true, email: true, name: true, role: true },
-        },
         assets: true,
         deliveries: true,
       },
