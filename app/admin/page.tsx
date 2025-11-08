@@ -188,16 +188,22 @@ export default async function AdminPage() {
                     {"completionNotifiedAt" in project &&
                       project.status === "COMPLETED" && (
                         <div className="mt-2 text-xs">
-                          {project.completionNotifiedAt ? (
-                            <span className="text-[#0f766e] font-medium">
-                              Email sent{" "}
-                              {formatDate(project.completionNotifiedAt)}
-                            </span>
-                          ) : (
-                            <span className="text-[#b45309]">
-                              Awaiting client email
-                            </span>
-                          )}
+                          {(() => {
+                            const notifiedAt = (
+                              project as {
+                                completionNotifiedAt?: Date | string | null;
+                              }
+                            ).completionNotifiedAt;
+                            return notifiedAt ? (
+                              <span className="text-[#0f766e] font-medium">
+                                Email sent {formatDate(notifiedAt)}
+                              </span>
+                            ) : (
+                              <span className="text-[#b45309]">
+                                Awaiting client email
+                              </span>
+                            );
+                          })()}
                         </div>
                       )}
                   </Link>
