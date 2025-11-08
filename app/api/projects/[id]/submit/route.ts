@@ -18,7 +18,7 @@ export async function POST(
     return new NextResponse("Forbidden", { status: 403 });
   }
 
-  const project = await prisma.project.findUnique({
+  const project = ((await prisma.project.findUnique({
     where: { id },
     select: {
       staffId: true,
@@ -26,8 +26,16 @@ export async function POST(
       completionNotifiedAt: true,
       completionSubmittedAt: true,
       _count: { select: { deliveries: true } },
-    },
-  });
+    } as any,
+  })) as unknown) as
+    | {
+        staffId: string | null;
+        status: string;
+        completionNotifiedAt: Date | null;
+        completionSubmittedAt: Date | null;
+        _count: { deliveries: number };
+      }
+    | null;
 
   if (!project) {
     return new NextResponse("Not Found", { status: 404 });
@@ -47,7 +55,7 @@ export async function POST(
     );
   }
 
-  const updated = await prisma.project.update({
+  const updated = ((await prisma.project.update({
     where: { id },
     data: {
       status: "COMPLETED",
@@ -59,8 +67,13 @@ export async function POST(
       status: true,
       completionSubmittedAt: true,
       completionNotifiedAt: true,
-    },
-  });
+    } as any,
+  })) as unknown) as {
+    id: string;
+    status: string;
+    completionSubmittedAt: Date | null;
+    completionNotifiedAt: Date | null;
+  };
 
   return NextResponse.json({
     ok: true,
