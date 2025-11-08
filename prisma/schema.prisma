@@ -1,0 +1,131 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+  CLIENT
+}
+
+enum ProjectStatus {
+  PENDING      // Client ame-upload assets, bado haijaanza
+  IN_PROGRESS  // Staff anafanya kazi
+  COMPLETED    // Delivery imekamilika
+}
+
+enum AssetType {
+  SCRIPT
+  IMAGE
+  AUDIO
+  OTHER
+}
+
+enum FolderType {
+  PROJECT      // Folder la specific project
+  ASSETS       // Folder la shared assets
+  DELIVERABLES // Folder la deliverables (staff anaweza ku-create subfolders na upload files)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String
+  role          Role      @default(CLIENT)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  createdById   String?   // Admin aliye-mtengeneza
+  createdBy     User?     @relation("UserCreator", fields: [createdById], references: [id])
+  createdUsers  User[]    @relation("UserCreator")
+  clientProjects Project[] @relation("ClientProjects")
+  staffProjects  Project[] @relation("StaffProjects")
+  createdProjects Project[] @relation("ProjectCreator") // Projects aliye-unda
+  deliveries    Delivery[] @relation("Deliveries")
+  assets        Asset[]   @relation("AssetUploads")
+  videos        Video[]   @relation("UserVideos") // Legacy videos
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  title       String?
+  description String?
+  status      ProjectStatus @default(PENDING)
+  clientId    String
+  client      User          @relation("ClientProjects", fields: [clientId], references: [id])
+  staffId     String?       // Staff anayefanya kazi
+  staff       User?         @relation("StaffProjects", fields: [staffId], references: [id])
+  createdById String?       // User aliye-unda project (ADMIN, STAFF, au CLIENT)
+  createdBy   User?         @relation("ProjectCreator", fields: [createdById], references: [id])
+  assets      Asset[]
+  deliveries  Delivery[]
+  folders     Folder[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Folder {
+  id          String     @id @default(cuid())
+  name        String
+  type        FolderType @default(PROJECT) // PROJECT au ASSETS
+  projectId   String
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assets      Asset[]
+  deliveries  Delivery[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Asset {
+  id          String   @id @default(cuid())
+  key         String   @unique // R2 object key
+  filename    String
+  contentType String
+  sizeBytes   Int
+  type        AssetType
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  folderId    String?  // Folder asset iko ndani yake
+  folder      Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  uploadedById String  // User aliye-upload
+  uploadedBy   User    @relation("AssetUploads", fields: [uploadedById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model Delivery {
+  id          String   @id @default(cuid())
+  key         String   @unique // R2 object key
+  filename    String
+  contentType String
+  sizeBytes   Int
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  folderId    String?  // Folder delivery iko ndani yake (PROJECT folder)
+  folder      Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  uploadedById String  // Staff aliye-upload
+  uploadedBy   User    @relation("Deliveries", fields: [uploadedById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+// Legacy Video model - tuta-remove baadaye, lakini kwa sasa tu-keep kwa backward compatibility
+model Video {
+  id           String   @id @default(cuid())
+  key          String   @unique // R2 object key
+  filename     String
+  contentType  String
+  sizeBytes    Int
+  createdAt    DateTime @default(now())
+  ownerId      String
+  owner        User     @relation("UserVideos", fields: [ownerId], references: [id])
+}
