@@ -31,12 +31,6 @@ export async function GET(
         createdBy: {
           select: { id: true, email: true, name: true, role: true },
         },
-        completionSubmittedBy: {
-          select: { id: true, email: true, name: true, role: true },
-        },
-        completionNotifiedBy: {
-          select: { id: true, email: true, name: true, role: true },
-        },
         assets: {
           include: {
             uploadedBy: { select: { id: true, email: true, name: true } },
@@ -102,12 +96,6 @@ export async function GET(
           client: { select: { id: true, email: true, name: true } },
           staff: { select: { id: true, email: true, name: true } },
           createdBy: {
-            select: { id: true, email: true, name: true, role: true },
-          },
-          completionSubmittedBy: {
-            select: { id: true, email: true, name: true, role: true },
-          },
-          completionNotifiedBy: {
             select: { id: true, email: true, name: true, role: true },
           },
           assets: {
