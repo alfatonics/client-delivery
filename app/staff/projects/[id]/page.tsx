@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState, use, useRef } from "react";
+import type { DragEvent, Dispatch, SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -60,9 +61,14 @@ export default function StaffProjectPage({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadingAsset, setUploadingAsset] = useState(false);
+  const [assetUploadProgress, setAssetUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [deliveryFiles, setDeliveryFiles] = useState<File[]>([]);
+  const [assetFiles, setAssetFiles] = useState<File[]>([]);
+  const deliveryInputRef = useRef<HTMLInputElement | null>(null);
+  const assetInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDeliveryDragging, setIsDeliveryDragging] = useState(false);
+  const [isAssetDragging, setIsAssetDragging] = useState(false);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedDeliveryFolderId, setSelectedDeliveryFolderId] = useState<
     string | null
@@ -83,6 +89,23 @@ export default function StaffProjectPage({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [currentDeliveryUploadName, setCurrentDeliveryUploadName] = useState<
+    string | null
+  >(null);
+  const [currentDeliveryUploadIndex, setCurrentDeliveryUploadIndex] =
+    useState(0);
+  const [deliveryUploadQueueSize, setDeliveryUploadQueueSize] = useState(0);
+  const [currentAssetUploadName, setCurrentAssetUploadName] = useState<
+    string | null
+  >(null);
+  const [currentAssetUploadIndex, setCurrentAssetUploadIndex] = useState(0);
+  const [assetUploadQueueSize, setAssetUploadQueueSize] = useState(0);
+  const totalDeliveryUploads =
+    deliveryUploadQueueSize > 0
+      ? deliveryUploadQueueSize
+      : deliveryFiles.length;
+  const totalAssetUploads =
+    assetUploadQueueSize > 0 ? assetUploadQueueSize : assetFiles.length;
 
   // Helper function to check if file is an image
   const isImage = (contentType: string, filename: string): boolean => {
@@ -127,6 +150,81 @@ export default function StaffProjectPage({
       return new Date(value).toLocaleString();
     } catch (error) {
       return value;
+    }
+  };
+
+  const fileKey = (file: File) =>
+    `${file.name}-${file.size}-${file.lastModified}`;
+
+  const addFilesToQueue = (
+    incoming: FileList | File[],
+    setQueue: Dispatch<SetStateAction<File[]>>
+  ) => {
+    const filesArray =
+      incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+    if (filesArray.length === 0) {
+      return;
+    }
+    setQueue((prev) => {
+      const existingKeys = new Set(prev.map(fileKey));
+      const nextFiles = filesArray.filter(
+        (candidate) => !existingKeys.has(fileKey(candidate))
+      );
+      return [...prev, ...nextFiles];
+    });
+  };
+
+  const handleDeliveryFiles = (incoming: FileList | File[]) => {
+    addFilesToQueue(incoming, setDeliveryFiles);
+    if (deliveryInputRef.current) {
+      deliveryInputRef.current.value = "";
+    }
+  };
+
+  const handleAssetFiles = (incoming: FileList | File[]) => {
+    addFilesToQueue(incoming, setAssetFiles);
+    if (assetInputRef.current) {
+      assetInputRef.current.value = "";
+    }
+  };
+
+  const removeDeliveryFile = (index: number) => {
+    setDeliveryFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const removeAssetFile = (index: number) => {
+    setAssetFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleDeliveryDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!isDeliveryDragging) {
+      setIsDeliveryDragging(true);
+    }
+  };
+
+  const handleDeliveryDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDeliveryDragging(false);
+    if (event.dataTransfer?.files?.length) {
+      handleDeliveryFiles(event.dataTransfer.files);
+    }
+  };
+
+  const handleAssetDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!isAssetDragging) {
+      setIsAssetDragging(true);
+    }
+  };
+
+  const handleAssetDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsAssetDragging(false);
+    if (event.dataTransfer?.files?.length) {
+      handleAssetFiles(event.dataTransfer.files);
     }
   };
 
@@ -178,164 +276,231 @@ export default function StaffProjectPage({
     }
   };
 
+  const resolveDeliveryFolderId = () => {
+    if (!project) {
+      throw new Error(
+        "Project data is still loading. Please try again in a moment."
+      );
+    }
+
+    let targetFolderId: string | undefined;
+    if (viewMode !== "all") {
+      const currentFolder = project.folders.find((f) => f.id === viewMode);
+      if (
+        currentFolder?.type !== "PROJECT" &&
+        currentFolder?.type !== "DELIVERABLES"
+      ) {
+        throw new Error(
+          "Deliveries can only be uploaded to Project or Deliverables folders"
+        );
+      }
+      targetFolderId = viewMode;
+    } else if (!selectedDeliveryFolderId) {
+      const deliverablesFolder = project.folders.find(
+        (f) => f.type === "DELIVERABLES"
+      );
+      const projectFolder = project.folders.find((f) => f.type === "PROJECT");
+      if (deliverablesFolder) {
+        targetFolderId = deliverablesFolder.id;
+      } else if (projectFolder) {
+        targetFolderId = projectFolder.id;
+      } else {
+        throw new Error(
+          "No Deliverables or Project folder found. Please create a folder first."
+        );
+      }
+    } else {
+      const selectedFolder = project.folders.find(
+        (f) => f.id === selectedDeliveryFolderId
+      );
+      if (
+        selectedFolder?.type !== "PROJECT" &&
+        selectedFolder?.type !== "DELIVERABLES"
+      ) {
+        throw new Error(
+          "Deliveries can only be uploaded to Project or Deliverables folders"
+        );
+      }
+      targetFolderId = selectedDeliveryFolderId;
+    }
+
+    if (!targetFolderId) {
+      throw new Error("Unable to determine target folder for deliveries.");
+    }
+    return targetFolderId;
+  };
+
+  const resolveAssetFolderId = () => {
+    if (!project) {
+      throw new Error(
+        "Project data is still loading. Please try again in a moment."
+      );
+    }
+
+    let targetFolderId: string | undefined;
+    if (viewMode !== "all") {
+      const currentFolder = project.folders.find((f) => f.id === viewMode);
+      if (currentFolder?.type !== "ASSETS") {
+        throw new Error("Assets can only be uploaded to Assets folders");
+      }
+      targetFolderId = viewMode;
+    } else if (!selectedFolderId) {
+      const assetsFolder = project.folders.find((f) => f.type === "ASSETS");
+      if (!assetsFolder) {
+        throw new Error("No Assets folder found. Please contact support.");
+      }
+      targetFolderId = assetsFolder.id;
+    } else {
+      const selectedFolder = project.folders.find(
+        (f) => f.id === selectedFolderId
+      );
+      if (selectedFolder?.type !== "ASSETS") {
+        throw new Error("Assets can only be uploaded to Assets folders");
+      }
+      targetFolderId = selectedFolderId;
+    }
+
+    if (!targetFolderId) {
+      throw new Error("Unable to determine target folder for assets.");
+    }
+
+    return targetFolderId;
+  };
+
   const onUpload = async () => {
-    if (!file) return;
+    if (deliveryFiles.length === 0) return;
     setUploading(true);
     setError(null);
+    setUploadProgress(0);
+
+    const filesToUpload = [...deliveryFiles];
+    setDeliveryUploadQueueSize(filesToUpload.length);
 
     try {
-      // Determine target folder for deliveries (can be PROJECT or DELIVERABLES folder)
-      let targetFolderId: string | undefined;
-      if (viewMode !== "all") {
-        const currentFolder = project?.folders.find((f) => f.id === viewMode);
-        if (
-          currentFolder?.type !== "PROJECT" &&
-          currentFolder?.type !== "DELIVERABLES"
-        ) {
+      const targetFolderId = resolveDeliveryFolderId();
+
+      for (let index = 0; index < filesToUpload.length; index++) {
+        const currentFile = filesToUpload[index];
+        setCurrentDeliveryUploadName(currentFile.name);
+        setCurrentDeliveryUploadIndex(index + 1);
+
+        const initRes = await fetch(`/api/projects/${id}/deliveries`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: currentFile.name,
+            contentType: currentFile.type || "application/octet-stream",
+            sizeBytes: currentFile.size,
+            folderId: targetFolderId,
+          }),
+        });
+
+        if (!initRes.ok) {
+          const errorData = await initRes
+            .json()
+            .catch(() => ({ error: "Failed to initialize upload" }));
           throw new Error(
-            "Deliveries can only be uploaded to Project or Deliverables folders"
+            errorData.error ||
+              `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
           );
         }
-        targetFolderId = viewMode;
-      } else {
-        if (!selectedDeliveryFolderId) {
-          // Auto-select first DELIVERABLES or PROJECT folder if none selected
-          const deliverablesFolder = project?.folders.find(
-            (f) => f.type === "DELIVERABLES"
+
+        const init = await initRes.json();
+        const { uploadId, key, partSize, presignedPartUrls, completeUrl } = init;
+
+        if (!Array.isArray(presignedPartUrls) || presignedPartUrls.length === 0) {
+          throw new Error(
+            `Invalid response from server for ${currentFile.name}: missing presigned URLs`
           );
-          const projectFolder = project?.folders.find(
-            (f) => f.type === "PROJECT"
+        }
+
+        const totalParts = presignedPartUrls.length;
+        const etags: { ETag: string; PartNumber: number }[] = [];
+
+        for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+          const start = (partNumber - 1) * partSize;
+          const end = Math.min(start + partSize, currentFile.size);
+          const blob = currentFile.slice(start, end);
+
+          const res = await fetch(
+            `/api/r2/upload-part?url=${encodeURIComponent(
+              presignedPartUrls[partNumber - 1]
+            )}`,
+            {
+              method: "PUT",
+              body: blob,
+              headers: {
+                "Content-Type":
+                  currentFile.type || "application/octet-stream",
+              },
+            }
           );
-          if (deliverablesFolder) {
-            targetFolderId = deliverablesFolder.id;
-          } else if (projectFolder) {
-            targetFolderId = projectFolder.id;
-          } else {
+
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
             throw new Error(
-              "No Deliverables or Project folder found. Please create a folder first."
+              `Part ${partNumber} upload failed for ${currentFile.name}: ${
+                errorData.error || res.statusText
+              }`
             );
           }
-        } else {
-          const selectedFolder = project?.folders.find(
-            (f) => f.id === selectedDeliveryFolderId
-          );
-          if (
-            selectedFolder?.type !== "PROJECT" &&
-            selectedFolder?.type !== "DELIVERABLES"
-          ) {
+
+          const data = await res.json();
+          const etag = data.etag;
+
+          if (!etag) {
             throw new Error(
-              "Deliveries can only be uploaded to Project or Deliverables folders"
+              `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
             );
           }
-          targetFolderId = selectedDeliveryFolderId;
+
+          etags.push({ ETag: etag, PartNumber: partNumber });
+
+          const overallProgress =
+            ((index + (partNumber - 1) / totalParts) / filesToUpload.length) *
+            100;
+          setUploadProgress(Math.min(99, Math.round(overallProgress)));
         }
-      }
 
-      const initRes = await fetch(`/api/projects/${id}/deliveries`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          sizeBytes: file.size,
-          folderId: targetFolderId,
-        }),
-      });
+        const completeRes = await fetch(completeUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key,
+            uploadId,
+            parts: etags,
+            filename: currentFile.name,
+            contentType: currentFile.type || "application/octet-stream",
+            sizeBytes: currentFile.size,
+            folderId: targetFolderId,
+          }),
+        });
 
-      if (!initRes.ok) {
-        const errorData = await initRes
-          .json()
-          .catch(() => ({ error: "Failed to initialize upload" }));
-        throw new Error(
-          errorData.error || `Upload initialization failed: ${initRes.status}`
-        );
-      }
-
-      const init = await initRes.json();
-      const { uploadId, key, partSize, presignedPartUrls, completeUrl } = init;
-
-      if (!presignedPartUrls || !Array.isArray(presignedPartUrls)) {
-        throw new Error("Invalid response from server: missing presigned URLs");
-      }
-
-      const totalParts = presignedPartUrls.length;
-      const etags: { ETag: string; PartNumber: number }[] = [];
-
-      // Use proxy directly to avoid CORS errors (since CORS is not configured on R2 bucket)
-      // This eliminates browser console errors completely
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        // Update progress (0-90% for parts)
-        setUploadProgress(Math.round(((partNumber - 1) / totalParts) * 90));
-
-        const start = (partNumber - 1) * partSize;
-        const end = Math.min(start + partSize, file.size);
-        const blob = file.slice(start, end);
-
-        // Use proxy directly - no direct upload attempt to avoid CORS console errors
-        const res = await fetch(
-          `/api/r2/upload-part?url=${encodeURIComponent(
-            presignedPartUrls[partNumber - 1]
-          )}`,
-          {
-            method: "PUT",
-            body: blob,
-            headers: {
-              "Content-Type": file.type || "application/octet-stream",
-            },
-          }
-        );
-
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}));
+        if (!completeRes.ok) {
+          const errorData = await completeRes.json().catch(() => ({}));
           throw new Error(
-            `Part ${partNumber} upload failed: ${
-              errorData.error || res.statusText
-            }`
+            errorData.error ||
+              `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
           );
         }
 
-        const data = await res.json();
-        const etag = data.etag;
-
-        if (!etag) {
-          throw new Error(`Part ${partNumber} upload failed: no ETag received`);
-        }
-
-        etags.push({ ETag: etag, PartNumber: partNumber });
-        // Update progress after each part completes (0-90% for parts)
-        setUploadProgress(Math.round((partNumber / totalParts) * 90));
+        const completionProgress =
+          ((index + 1) / filesToUpload.length) * 100;
+        setUploadProgress(Math.round(completionProgress));
       }
-
-      // Update progress to 95% before completing
-      setUploadProgress(95);
-
-      const completeRes = await fetch(completeUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key,
-          uploadId,
-          parts: etags,
-          filename: file.name,
-          contentType: file.type,
-          sizeBytes: file.size,
-          folderId: targetFolderId,
-        }),
-      });
-      if (!completeRes.ok) throw new Error("Complete failed");
-
-      // Update progress to 100% after completion
-      setUploadProgress(100);
 
       await fetchProject();
-      setFile(null);
-      // Reset progress after a short delay to show 100%
+      setDeliveryFiles([]);
+      setUploadProgress(100);
       setTimeout(() => setUploadProgress(0), 500);
     } catch (e: any) {
       setError(e.message || "Upload failed");
       setUploadProgress(0);
     } finally {
       setUploading(false);
+      setCurrentDeliveryUploadName(null);
+      setCurrentDeliveryUploadIndex(0);
+      setDeliveryUploadQueueSize(0);
     }
   };
 
@@ -426,125 +591,144 @@ export default function StaffProjectPage({
   };
 
   const onUploadAsset = async () => {
-    if (!assetFile) return;
+    if (assetFiles.length === 0) return;
     setUploadingAsset(true);
     setError(null);
+    setAssetUploadProgress(0);
+
+    const filesToUpload = [...assetFiles];
+    setAssetUploadQueueSize(filesToUpload.length);
 
     try {
-      // Determine target folder for assets (must be ASSETS folder)
-      let targetFolderId: string | undefined;
-      if (viewMode !== "all") {
-        const currentFolder = project?.folders.find((f) => f.id === viewMode);
-        if (currentFolder?.type !== "ASSETS") {
-          throw new Error("Assets can only be uploaded to Assets folders");
-        }
-        targetFolderId = viewMode;
-      } else {
-        if (!selectedFolderId) {
-          // Auto-select first ASSETS folder if none selected
-          const assetsFolder = project?.folders.find(
-            (f) => f.type === "ASSETS"
-          );
-          if (!assetsFolder) {
-            throw new Error("No Assets folder found. Please contact support.");
-          }
-          targetFolderId = assetsFolder.id;
-        } else {
-          const selectedFolder = project?.folders.find(
-            (f) => f.id === selectedFolderId
-          );
-          if (selectedFolder?.type !== "ASSETS") {
-            throw new Error("Assets can only be uploaded to Assets folders");
-          }
-          targetFolderId = selectedFolderId;
-        }
-      }
+      const targetFolderId = resolveAssetFolderId();
 
-      const initRes = await fetch(`/api/projects/${id}/assets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: assetFile.name,
-          contentType: assetFile.type || "application/octet-stream",
-          sizeBytes: assetFile.size,
-          folderId: targetFolderId,
-        }),
-      });
-      const init = await initRes.json();
-      const {
-        uploadId,
-        key,
-        partSize,
-        presignedPartUrls,
-        completeUrl,
-        folderId: returnedFolderId,
-      } = init;
+      for (let index = 0; index < filesToUpload.length; index++) {
+        const currentFile = filesToUpload[index];
+        setCurrentAssetUploadName(currentFile.name);
+        setCurrentAssetUploadIndex(index + 1);
 
-      const totalParts = presignedPartUrls.length;
-      const etags: { ETag: string; PartNumber: number }[] = [];
+        const initRes = await fetch(`/api/projects/${id}/assets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: currentFile.name,
+            contentType: currentFile.type || "application/octet-stream",
+            sizeBytes: currentFile.size,
+            folderId: targetFolderId,
+          }),
+        });
 
-      // Use proxy directly to avoid CORS errors (since CORS is not configured on R2 bucket)
-      // This eliminates browser console errors completely
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        const start = (partNumber - 1) * partSize;
-        const end = Math.min(start + partSize, assetFile.size);
-        const blob = assetFile.slice(start, end);
-
-        // Use proxy directly - no direct upload attempt to avoid CORS console errors
-        const res = await fetch(
-          `/api/r2/upload-part?url=${encodeURIComponent(
-            presignedPartUrls[partNumber - 1]
-          )}`,
-          {
-            method: "PUT",
-            body: blob,
-            headers: {
-              "Content-Type": assetFile.type || "application/octet-stream",
-            },
-          }
-        );
-
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}));
+        if (!initRes.ok) {
+          const errorData = await initRes
+            .json()
+            .catch(() => ({ error: "Failed to initialize upload" }));
           throw new Error(
-            `Part ${partNumber} upload failed: ${
-              errorData.error || res.statusText
-            }`
+            errorData.error ||
+              `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
           );
         }
 
-        const data = await res.json();
-        const etag = data.etag;
+        const init = await initRes.json();
+        const {
+          uploadId,
+          key,
+          partSize,
+          presignedPartUrls,
+          completeUrl,
+        } = init;
 
-        if (!etag) {
-          throw new Error(`Part ${partNumber} upload failed: no ETag received`);
+        if (!Array.isArray(presignedPartUrls) || presignedPartUrls.length === 0) {
+          throw new Error(
+            `Invalid response from server for ${currentFile.name}: missing presigned URLs`
+          );
         }
 
-        etags.push({ ETag: etag, PartNumber: partNumber });
-      }
+        const totalParts = presignedPartUrls.length;
+        const etags: { ETag: string; PartNumber: number }[] = [];
 
-      const completeRes = await fetch(completeUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key,
-          uploadId,
-          parts: etags,
-          filename: assetFile.name,
-          contentType: assetFile.type || "application/octet-stream",
-          sizeBytes: assetFile.size,
-          folderId: targetFolderId,
-        }),
-      });
-      if (!completeRes.ok) throw new Error("Complete failed");
+        for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+          const start = (partNumber - 1) * partSize;
+          const end = Math.min(start + partSize, currentFile.size);
+          const blob = currentFile.slice(start, end);
+
+          const res = await fetch(
+            `/api/r2/upload-part?url=${encodeURIComponent(
+              presignedPartUrls[partNumber - 1]
+            )}`,
+            {
+              method: "PUT",
+              body: blob,
+              headers: {
+                "Content-Type":
+                  currentFile.type || "application/octet-stream",
+              },
+            }
+          );
+
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            throw new Error(
+              `Part ${partNumber} upload failed for ${currentFile.name}: ${
+                errorData.error || res.statusText
+              }`
+            );
+          }
+
+          const data = await res.json();
+          const etag = data.etag;
+          if (!etag) {
+            throw new Error(
+              `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
+            );
+          }
+          etags.push({ ETag: etag, PartNumber: partNumber });
+
+          const overallProgress =
+            ((index + (partNumber - 1) / totalParts) / filesToUpload.length) *
+            100;
+          setAssetUploadProgress(Math.min(99, Math.round(overallProgress)));
+        }
+
+        const completeRes = await fetch(completeUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key,
+            uploadId,
+            parts: etags,
+            filename: currentFile.name,
+            contentType: currentFile.type || "application/octet-stream",
+            sizeBytes: currentFile.size,
+            folderId: targetFolderId,
+          }),
+        });
+
+        if (!completeRes.ok) {
+          const errorData = await completeRes.json().catch(() => ({}));
+          throw new Error(
+            errorData.error ||
+              `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
+          );
+        }
+
+        const completionProgress =
+          ((index + 1) / filesToUpload.length) * 100;
+        setAssetUploadProgress(Math.round(completionProgress));
+      }
 
       await fetchProject();
-      setAssetFile(null);
+      setAssetFiles([]);
       setSelectedFolderId(null);
+      setAssetUploadProgress(100);
+      setTimeout(() => setAssetUploadProgress(0), 500);
     } catch (e: any) {
       setError(e.message || "Upload failed");
+      setAssetUploadProgress(0);
     } finally {
       setUploadingAsset(false);
+      setCurrentAssetUploadName(null);
+      setCurrentAssetUploadIndex(0);
+      setAssetUploadQueueSize(0);
     }
   };
 
@@ -1219,37 +1403,103 @@ export default function StaffProjectPage({
               return (
                 <div>
                   {/* Upload Form - Inside ASSETS Folder */}
-                  <div className="card mb-4">
-                    <h3 className="font-medium text-[#202124] mb-4">
-                      Upload New Asset
-                    </h3>
-                    <div className="space-y-4">
-                      <div className="text-sm text-[#5f6368]">
-                        Uploading to: <strong>{currentFolder.name}</strong>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          onChange={(e) =>
-                            setAssetFile(e.target.files?.[0] || null)
-                          }
-                          className="input"
-                          accept="*/*"
-                        />
-                        <p className="text-xs text-[#5f6368] mt-1">
-                          All file types are supported. File type will be
-                          detected automatically.
-                        </p>
-                      </div>
-                      {error && <p className="text-red-600 text-sm">{error}</p>}
-                      <button
-                        onClick={onUploadAsset}
-                        disabled={!assetFile || uploadingAsset}
-                        className="btn-primary disabled:opacity-50"
-                      >
-                        {uploadingAsset ? "Uploading..." : "Upload Asset"}
-                      </button>
+                  <div className="card mb-4 space-y-4">
+                    <div className="text-sm text-[#5f6368]">
+                      Uploading to: <strong>{currentFolder.name}</strong>
                     </div>
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+                        isAssetDragging
+                          ? "border-[#1a73e8] bg-[#e8f0fe]"
+                          : "border-[#dadce0] bg-white"
+                      }`}
+                      onDragOver={handleAssetDragOver}
+                      onDragLeave={() => setIsAssetDragging(false)}
+                      onDrop={handleAssetDrop}
+                      onClick={() => assetInputRef.current?.click()}
+                    >
+                      <input
+                        ref={assetInputRef}
+                        type="file"
+                        accept="*/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files) {
+                            handleAssetFiles(e.target.files);
+                          }
+                        }}
+                      />
+                      <p className="font-medium text-[#202124]">
+                        Drag & drop files here
+                      </p>
+                      <p className="text-sm text-[#5f6368]">
+                        or tap to select multiple assets from your device
+                      </p>
+                      <p className="text-xs text-[#80868b] mt-2">
+                        All file types are supported. Multi-select works on
+                        desktop and mobile.
+                      </p>
+                    </div>
+                    {assetFiles.length > 0 && (
+                      <div className="border border-[#dadce0] rounded-lg divide-y divide-[#dadce0]/60 bg-white">
+                        {assetFiles.map((selected, index) => (
+                          <div
+                            key={`${selected.name}-${selected.size}-${selected.lastModified}-${index}`}
+                            className="flex items-center justify-between px-3 py-2 text-sm text-[#202124]"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">
+                                {selected.name}
+                              </p>
+                              <p className="text-xs text-[#5f6368]">
+                                {(selected.size / (1024 * 1024)).toFixed(2)} MB
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeAssetFile(index)}
+                              disabled={uploadingAsset}
+                              className="text-xs text-[#1a73e8] hover:underline disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {error && <p className="text-red-600 text-sm">{error}</p>}
+                    {uploadingAsset && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm text-[#5f6368]">
+                          <span>
+                            Uploading {currentAssetUploadName || "files"} (
+                            {currentAssetUploadIndex}/
+                            {Math.max(totalAssetUploads, 1)})
+                          </span>
+                          <span>{assetUploadProgress}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                          <div
+                            className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                            style={{ width: `${assetUploadProgress}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      onClick={onUploadAsset}
+                      disabled={assetFiles.length === 0 || uploadingAsset}
+                      className="btn-primary disabled:opacity-50"
+                    >
+                      {uploadingAsset
+                        ? "Uploading..."
+                        : assetFiles.length > 0
+                        ? `Upload ${assetFiles.length} Asset${
+                            assetFiles.length === 1 ? "" : "s"
+                          }`
+                        : "Upload Assets"}
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-2 mb-4">
@@ -1373,48 +1623,105 @@ export default function StaffProjectPage({
               return (
                 <>
                   {/* Upload Form - Inside PROJECT or DELIVERABLES Folder */}
-                  <div className="card mb-4">
-                    <h3 className="font-medium text-[#202124] mb-4">
-                      Upload New Delivery
-                    </h3>
-                    <div className="space-y-4">
-                      <div className="text-sm text-[#5f6368]">
-                        Uploading to: <strong>{currentFolder.name}</strong>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          accept="*/*"
-                          onChange={(e) => setFile(e.target.files?.[0] || null)}
-                          className="input"
-                        />
-                        <p className="text-xs text-[#5f6368] mt-1">
-                          All file types are supported.
-                        </p>
-                      </div>
-                      {error && <p className="text-red-600 text-sm">{error}</p>}
-                      {uploading && (
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-sm text-[#5f6368]">
-                            <span>Uploading...</span>
-                            <span>{uploadProgress}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2.5">
-                            <div
-                              className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                              style={{ width: `${uploadProgress}%` }}
-                            ></div>
-                          </div>
-                        </div>
-                      )}
-                      <button
-                        onClick={onUpload}
-                        disabled={!file || uploading}
-                        className="btn-primary disabled:opacity-50"
-                      >
-                        {uploading ? "Uploading..." : "Upload Delivery"}
-                      </button>
+                  <div className="card mb-4 space-y-4">
+                    <div className="text-sm text-[#5f6368]">
+                      Uploading to: <strong>{currentFolder.name}</strong>
                     </div>
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+                        isDeliveryDragging
+                          ? "border-[#1a73e8] bg-[#e8f0fe]"
+                          : "border-[#dadce0] bg-white"
+                      }`}
+                      onDragOver={handleDeliveryDragOver}
+                      onDragLeave={() => setIsDeliveryDragging(false)}
+                      onDrop={handleDeliveryDrop}
+                      onClick={() => deliveryInputRef.current?.click()}
+                    >
+                      <input
+                        ref={deliveryInputRef}
+                        type="file"
+                        accept="*/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files) {
+                            handleDeliveryFiles(e.target.files);
+                          }
+                        }}
+                      />
+                      <p className="font-medium text-[#202124]">
+                        Drag & drop files here
+                      </p>
+                      <p className="text-sm text-[#5f6368]">
+                        or tap to select multiple deliveries from your device
+                      </p>
+                      <p className="text-xs text-[#80868b] mt-2">
+                        All file types are supported. Multi-select works on
+                        desktop and mobile.
+                      </p>
+                    </div>
+                    {deliveryFiles.length > 0 && (
+                      <div className="border border-[#dadce0] rounded-lg divide-y divide-[#dadce0]/60 bg-white">
+                        {deliveryFiles.map((selected, index) => (
+                          <div
+                            key={`${selected.name}-${selected.size}-${selected.lastModified}-${index}`}
+                            className="flex items-center justify-between px-3 py-2 text-sm text-[#202124]"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">
+                                {selected.name}
+                              </p>
+                              <p className="text-xs text-[#5f6368]">
+                                {(selected.size / (1024 * 1024)).toFixed(2)} MB
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeDeliveryFile(index)}
+                              disabled={uploading}
+                              className="text-xs text-[#1a73e8] hover:underline disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {error && <p className="text-red-600 text-sm">{error}</p>}
+                    {uploading && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm text-[#5f6368]">
+                          <span>
+                            Uploading {currentDeliveryUploadName || "files"} (
+                            {currentDeliveryUploadIndex}/
+                            {Math.max(totalDeliveryUploads, 1)})
+                          </span>
+                          <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                          <div
+                            className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                            style={{ width: `${uploadProgress}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      onClick={onUpload}
+                      disabled={deliveryFiles.length === 0 || uploading}
+                      className="btn-primary disabled:opacity-50"
+                    >
+                      {uploading
+                        ? "Uploading..."
+                        : deliveryFiles.length > 0
+                        ? `Upload ${deliveryFiles.length} ${
+                            deliveryFiles.length === 1
+                              ? "Delivery"
+                              : "Deliveries"
+                          }`
+                        : "Upload Deliveries"}
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-2 mb-4">
