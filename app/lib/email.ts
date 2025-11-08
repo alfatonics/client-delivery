@@ -298,3 +298,125 @@ Thank you for working with ${COMPANY_NAME}.`;
     text: textContent,
   });
 }
+
+export async function sendProjectAssignmentEmail(options: {
+  to: string;
+  staffName?: string | null;
+  projectTitle?: string | null;
+  projectId: string;
+  clientName?: string | null;
+  clientEmail?: string | null;
+  createdByName?: string | null;
+  notes?: string | null;
+}) {
+  const projectLabel =
+    options.projectTitle && options.projectTitle.trim().length > 0
+      ? options.projectTitle.trim()
+      : `Project ${options.projectId.slice(0, 8).toUpperCase()}`;
+
+  const staffProjectUrl = new URL(
+    `/staff/projects/${options.projectId}`,
+    APP_BASE_URL
+  ).toString();
+
+  const clientLine =
+    options.clientName || options.clientEmail
+      ? `<li style="margin:0 0 8px;">
+            Client: <strong>${[options.clientName, options.clientEmail]
+              .filter(Boolean)
+              .join(" · ")}</strong>
+          </li>`
+      : "";
+
+  const adminLine = options.createdByName
+    ? `<li style="margin:0 0 8px;">
+          Assigned by: <strong>${options.createdByName}</strong>
+        </li>`
+    : "";
+
+  const notesBlock =
+    options.notes && options.notes.trim().length > 0
+      ? `<div style="margin:24px 0;padding:18px 24px;border:1px solid #d8def4;border-radius:10px;background:#f4f6ff;">
+          <p style="margin:0 0 12px;font-weight:600;">Additional context</p>
+          <p style="margin:0;white-space:pre-wrap;">${options.notes
+            .trim()
+            .replace(
+              /\n/g,
+              "<br/>"
+            )}</p>
+        </div>`
+      : "";
+
+  const htmlContent = `
+    <p style="margin:0 0 16px;">${formatGreeting(options.staffName)},</p>
+    <p style="margin:0 0 16px;">
+      You’ve been assigned to <strong>${projectLabel}</strong> in the Alfatonics client delivery portal.
+      Please review the brief and begin work at your earliest convenience.
+    </p>
+    <div style="margin:24px 0;padding:18px 24px;border:1px solid #d8def4;border-radius:10px;background:#f4f6ff;">
+      <p style="margin:0 0 12px;font-weight:600;">Project details</p>
+      <ul style="margin:0;padding-left:20px;">
+        <li style="margin:0 0 8px;">
+          Project: <strong>${projectLabel}</strong>
+        </li>
+        ${clientLine}
+        ${adminLine}
+        <li style="margin:0 0 8px;">
+          Portal link: <a href="${staffProjectUrl}" style="color:#e98923;text-decoration:none;">${staffProjectUrl}</a>
+        </li>
+      </ul>
+    </div>
+    ${notesBlock}
+    <p style="margin:0 0 16px;">
+      If you have any questions or need more context, please reach out to the admin team or reply to this email.
+    </p>
+    <p style="margin:0;">
+      Thank you,<br/>The ${COMPANY_NAME} Team
+    </p>
+  `;
+
+  const textLines = [
+    `${formatGreeting(options.staffName)},`,
+    "",
+    `You’ve been assigned to ${projectLabel} in the Alfatonics client delivery portal.`,
+  ];
+
+  if (options.clientName || options.clientEmail) {
+    textLines.push(
+      "",
+      "Client:",
+      `- ${[options.clientName, options.clientEmail].filter(Boolean).join(
+        " · "
+      )}`
+    );
+  }
+
+  if (options.createdByName) {
+    textLines.push("", `Assigned by: ${options.createdByName}`);
+  }
+
+  textLines.push(
+    "",
+    `Portal link: ${staffProjectUrl}`,
+    ""
+  );
+
+  if (options.notes && options.notes.trim().length > 0) {
+    textLines.push("Additional context:", options.notes.trim(), "");
+  }
+
+  textLines.push(
+    "Need anything else? Reply to this email or contact the admin team.",
+    "",
+    `The ${COMPANY_NAME} Team`
+  );
+
+  const textContent = textLines.join("\n");
+
+  await sendEmail({
+    to: options.to,
+    subject: `${projectLabel}: New assignment for you`,
+    html: buildEmailShell(htmlContent),
+    text: textContent,
+  });
+}

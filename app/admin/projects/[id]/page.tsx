@@ -123,6 +123,9 @@ export default function ProjectDetailPage({
   const [assetUploadQueueSize, setAssetUploadQueueSize] = useState(0);
   const totalAssetUploads =
     assetUploadQueueSize > 0 ? assetUploadQueueSize : assetFiles.length;
+  const [sendingStaffEmail, setSendingStaffEmail] = useState(false);
+  const [staffEmailError, setStaffEmailError] = useState<string | null>(null);
+  const [staffEmailSuccess, setStaffEmailSuccess] = useState<string | null>(null);
 
   const folders: Folder[] = project?.folders ?? [];
 
@@ -201,6 +204,8 @@ export default function ProjectDetailPage({
 
   const assignStaff = async () => {
     setAssigning(true);
+    setStaffEmailError(null);
+    setStaffEmailSuccess(null);
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: "PATCH",
@@ -346,9 +351,13 @@ export default function ProjectDetailPage({
         }
 
         const init = await initRes.json();
-        const { uploadId, key, partSize, presignedPartUrls, completeUrl } = init;
+        const { uploadId, key, partSize, presignedPartUrls, completeUrl } =
+          init;
 
-        if (!Array.isArray(presignedPartUrls) || presignedPartUrls.length === 0) {
+        if (
+          !Array.isArray(presignedPartUrls) ||
+          presignedPartUrls.length === 0
+        ) {
           throw new Error(
             `Invalid response from server for ${currentFile.name}: missing presigned URLs`
           );
@@ -370,8 +379,7 @@ export default function ProjectDetailPage({
               method: "PUT",
               body: blob,
               headers: {
-                "Content-Type":
-                  currentFile.type || "application/octet-stream",
+                "Content-Type": currentFile.type || "application/octet-stream",
               },
             }
           );
@@ -422,8 +430,7 @@ export default function ProjectDetailPage({
           );
         }
 
-        const completionProgress =
-          ((index + 1) / filesToUpload.length) * 100;
+        const completionProgress = ((index + 1) / filesToUpload.length) * 100;
         setAssetUploadProgress(Math.round(completionProgress));
       }
 
@@ -522,6 +529,41 @@ export default function ProjectDetailPage({
       setNotifyError(e.message || "Failed to send completion email.");
     } finally {
       setSendingEmail(false);
+    }
+  };
+
+  const sendStaffAssignmentEmail = async () => {
+    setStaffEmailError(null);
+    setStaffEmailSuccess(null);
+
+    if (!project?.staff?.email) {
+      setStaffEmailError(
+        "Assign a staff member before sending the assignment email."
+      );
+      return;
+    }
+
+    setSendingStaffEmail(true);
+    try {
+      const res = await fetch(`/api/projects/${id}/notify-staff`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to send staff assignment email");
+      }
+
+      setStaffEmailSuccess("Staff assignment email sent successfully.");
+    } catch (e: any) {
+      console.error("Failed to send staff email:", e);
+      setStaffEmailError(
+        e?.message || "Failed to send staff assignment email."
+      );
+    } finally {
+      setSendingStaffEmail(false);
     }
   };
 
@@ -895,9 +937,13 @@ export default function ProjectDetailPage({
             )}
           </div>
         </div>
-        <div className="card">
-          <h2 className="font-medium text-[#202124] mb-4">Assign Staff</h2>
-          <div className="flex gap-3">
+        <div className="card space-y-3">
+          <h2 className="font-medium text-[#202124]">Assign Staff</h2>
+          <p className="text-sm text-[#5f6368]">
+            Choose a team member to manage this project. Assigning automatically
+            moves the project to “In Progress”.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row">
             <select
               value={selectedStaffId}
               onChange={(e) => setSelectedStaffId(e.target.value)}
@@ -918,6 +964,34 @@ export default function ProjectDetailPage({
               {assigning ? "Assigning..." : "Assign"}
             </button>
           </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-[#5f6368]">
+              {project?.staff?.email ? (
+                <>
+                  Currently assigned to{" "}
+                  <strong>
+                    {project.staff.email}
+                    {project.staff.name ? ` (${project.staff.name})` : ""}
+                  </strong>
+                </>
+              ) : (
+                "No staff member currently assigned."
+              )}
+            </div>
+            <button
+              onClick={sendStaffAssignmentEmail}
+              disabled={sendingStaffEmail || !project?.staff?.email}
+              className="btn-secondary disabled:opacity-50 whitespace-nowrap"
+            >
+              {sendingStaffEmail ? "Sending..." : "Email Assigned Staff"}
+            </button>
+          </div>
+          {staffEmailError && (
+            <div className="text-sm text-red-600">{staffEmailError}</div>
+          )}
+          {staffEmailSuccess && (
+            <div className="text-sm text-green-600">{staffEmailSuccess}</div>
+          )}
         </div>
 
         {project.description && (
@@ -1374,103 +1448,104 @@ export default function ProjectDetailPage({
             </div>
           )}
 
-        {currentFolder?.type === "ASSETS" && (
-          <div className="card mb-4 space-y-4">
-            <div className="text-sm text-[#5f6368]">
-              Uploading to: <strong>{currentFolder.name}</strong>
-            </div>
-            <div
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
-                isAssetDragging
-                  ? "border-[#1a73e8] bg-[#e8f0fe]"
-                  : "border-[#dadce0] bg-white"
-              }`}
-              onDragOver={handleAssetDragOver}
-              onDragLeave={() => setIsAssetDragging(false)}
-              onDrop={handleAssetDrop}
-              onClick={() => assetInputRef.current?.click()}
-            >
-              <input
-                ref={assetInputRef}
-                type="file"
-                accept="*/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) {
-                    handleAssetFiles(e.target.files);
-                  }
-                }}
-              />
-              <p className="font-medium text-[#202124]">
-                Drag & drop files here
-              </p>
-              <p className="text-sm text-[#5f6368]">
-                or tap to select multiple assets from your device
-              </p>
-              <p className="text-xs text-[#80868b] mt-2">
-                All file types are supported. Multi-select works on desktop and
-                mobile.
-              </p>
-            </div>
-            {assetFiles.length > 0 && (
-              <div className="border border-[#dadce0] rounded-lg divide-y divide-[#dadce0]/60 bg-white">
-                {assetFiles.map((selected, index) => (
-                  <div
-                    key={`${selected.name}-${selected.size}-${selected.lastModified}-${index}`}
-                    className="flex items-center justify-between px-3 py-2 text-sm text-[#202124]"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{selected.name}</p>
-                      <p className="text-xs text-[#5f6368]">
-                        {(selected.size / (1024 * 1024)).toFixed(2)} MB
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeAssetFile(index)}
-                      disabled={uploading}
-                      className="text-xs text-[#1a73e8] hover:underline disabled:opacity-50"
+          {currentFolder?.type === "ASSETS" && (
+            <div className="card mb-4 space-y-4">
+              <div className="text-sm text-[#5f6368]">
+                Uploading to: <strong>{currentFolder.name}</strong>
+              </div>
+              <div
+                className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+                  isAssetDragging
+                    ? "border-[#1a73e8] bg-[#e8f0fe]"
+                    : "border-[#dadce0] bg-white"
+                }`}
+                onDragOver={handleAssetDragOver}
+                onDragLeave={() => setIsAssetDragging(false)}
+                onDrop={handleAssetDrop}
+                onClick={() => assetInputRef.current?.click()}
+              >
+                <input
+                  ref={assetInputRef}
+                  type="file"
+                  accept="*/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      handleAssetFiles(e.target.files);
+                    }
+                  }}
+                />
+                <p className="font-medium text-[#202124]">
+                  Drag & drop files here
+                </p>
+                <p className="text-sm text-[#5f6368]">
+                  or tap to select multiple assets from your device
+                </p>
+                <p className="text-xs text-[#80868b] mt-2">
+                  All file types are supported. Multi-select works on desktop
+                  and mobile.
+                </p>
+              </div>
+              {assetFiles.length > 0 && (
+                <div className="border border-[#dadce0] rounded-lg divide-y divide-[#dadce0]/60 bg-white">
+                  {assetFiles.map((selected, index) => (
+                    <div
+                      key={`${selected.name}-${selected.size}-${selected.lastModified}-${index}`}
+                      className="flex items-center justify-between px-3 py-2 text-sm text-[#202124]"
                     >
-                      Remove
-                    </button>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{selected.name}</p>
+                        <p className="text-xs text-[#5f6368]">
+                          {(selected.size / (1024 * 1024)).toFixed(2)} MB
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeAssetFile(index)}
+                        disabled={uploading}
+                        className="text-xs text-[#1a73e8] hover:underline disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {error && <p className="text-red-600 text-sm">{error}</p>}
+              {uploading && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm text-[#5f6368]">
+                    <span>
+                      Uploading {currentAssetUploadName || "files"} (
+                      {currentAssetUploadIndex}/{Math.max(totalAssetUploads, 1)}
+                      )
+                    </span>
+                    <span>{assetUploadProgress}%</span>
                   </div>
-                ))}
-              </div>
-            )}
-            {error && <p className="text-red-600 text-sm">{error}</p>}
-            {uploading && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm text-[#5f6368]">
-                  <span>
-                    Uploading {currentAssetUploadName || "files"} (
-                    {currentAssetUploadIndex}/{Math.max(totalAssetUploads, 1)})
-                  </span>
-                  <span>{assetUploadProgress}%</span>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                      style={{ width: `${assetUploadProgress}%` }}
+                    ></div>
+                  </div>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
-                  <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                    style={{ width: `${assetUploadProgress}%` }}
-                  ></div>
-                </div>
-              </div>
-            )}
-            <button
-              onClick={onUploadAsset}
-              disabled={assetFiles.length === 0 || uploading}
-              className="btn-primary disabled:opacity-50"
-            >
-              {uploading
-                ? "Uploading..."
-                : assetFiles.length > 0
-                ? `Upload ${assetFiles.length} Asset${
-                    assetFiles.length === 1 ? "" : "s"
-                  }`
-                : "Upload Assets"}
-            </button>
-          </div>
-        )}
+              )}
+              <button
+                onClick={onUploadAsset}
+                disabled={assetFiles.length === 0 || uploading}
+                className="btn-primary disabled:opacity-50"
+              >
+                {uploading
+                  ? "Uploading..."
+                  : assetFiles.length > 0
+                  ? `Upload ${assetFiles.length} Asset${
+                      assetFiles.length === 1 ? "" : "s"
+                    }`
+                  : "Upload Assets"}
+              </button>
+            </div>
+          )}
 
           {viewMode !== "all" && currentFolder?.type === "ASSETS" && (
             <div>
