@@ -41,9 +41,6 @@ export async function POST(
     where: { id },
     include: {
       client: { select: { id: true, email: true, name: true } },
-      completionSubmittedBy: {
-        select: { id: true, email: true, name: true, role: true },
-      },
     },
   });
 
