@@ -223,15 +223,30 @@ export async function PATCH(
       updateData.status = parsed.status;
 
       if (parsed.status === "COMPLETED") {
-        updateData.completionSubmittedAt = new Date();
-        updateData.completionSubmittedBy = { connect: { id: userId } };
+        (updateData as Prisma.ProjectUpdateInput & {
+          completionSubmittedAt?: Date | null;
+          completionSubmittedBy?: { connect: { id: string } };
+          completionNotifiedAt?: Date | null;
+          completionNotifiedBy?: { disconnect?: boolean };
+          completionNotifiedById?: string | null;
+          completionNotificationEmail?: string | null;
+          completionNotificationCc?: string | null;
+        }).completionSubmittedAt = new Date();
+        (updateData as any).completionSubmittedBy = { connect: { id: userId } };
       } else {
-        updateData.completionSubmittedAt = null;
-        updateData.completionSubmittedBy = { disconnect: true };
-        updateData.completionNotifiedAt = null;
-        updateData.completionNotifiedBy = { disconnect: true };
-        updateData.completionNotificationEmail = null;
-        updateData.completionNotificationCc = null;
+        (updateData as Prisma.ProjectUpdateInput & {
+          completionSubmittedAt?: Date | null;
+          completionSubmittedBy?: { disconnect?: boolean };
+          completionNotifiedAt?: Date | null;
+          completionNotifiedBy?: { disconnect?: boolean };
+          completionNotificationEmail?: string | null;
+          completionNotificationCc?: string | null;
+        }).completionSubmittedAt = null;
+        (updateData as any).completionSubmittedBy = { disconnect: true };
+        (updateData as any).completionNotifiedAt = null;
+        (updateData as any).completionNotifiedBy = { disconnect: true };
+        (updateData as any).completionNotificationEmail = null;
+        (updateData as any).completionNotificationCc = null;
       }
     }
 
