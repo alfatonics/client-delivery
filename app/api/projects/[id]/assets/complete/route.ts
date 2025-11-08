@@ -109,7 +109,7 @@ export async function POST(
     return NextResponse.json({ ok: true, location: result.Location });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 });
+      return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     return NextResponse.json(
       { error: error.message || "Failed to complete upload" },

@@ -24,74 +24,81 @@ function putRequest(
 }> {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
-    let timeoutId: NodeJS.Timeout;
-    let req: https.ClientRequest;
+    let timeoutId: NodeJS.Timeout | undefined;
     let isResolved = false;
 
-    timeoutId = setTimeout(() => {
-      if (!isResolved) {
-        isResolved = true;
-        if (req) {
-          req.destroy();
-        }
-        reject(new Error(`Request timeout after ${timeout}ms`));
-      }
-    }, timeout);
-
-    const options = {
+    const options: https.RequestOptions = {
       hostname: urlObj.hostname,
       port: urlObj.port || 443,
-      path: urlObj.pathname + urlObj.search,
+      path: `${urlObj.pathname}${urlObj.search}`,
       method: "PUT",
       headers: {
         ...headers,
         "Content-Length": data.length.toString(),
       },
       agent: httpsAgent,
-      family: 4, // Force IPv4
+      family: 4,
     };
 
-    req = https.request(options, (res) => {
-      if (timeoutId) clearTimeout(timeoutId);
+    const clearTimer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      clearTimer();
       let body = "";
+
       res.on("data", (chunk) => {
         body += chunk.toString();
       });
+
       res.on("end", () => {
-        if (!isResolved) {
-          isResolved = true;
-          resolve({
-            statusCode: res.statusCode || 500,
-            headers: res.headers,
-            body,
-          });
-        }
-      });
-      res.on("error", (error) => {
-        if (!isResolved) {
-          isResolved = true;
-          if (timeoutId) clearTimeout(timeoutId);
-          reject(error);
-        }
-      });
-    });
-
-    req.on("error", (error) => {
-      if (!isResolved) {
+        if (isResolved) return;
         isResolved = true;
-        if (timeoutId) clearTimeout(timeoutId);
+
+        const normalizedHeaders: Record<string, string | string[]> = {};
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (typeof value === "string" || Array.isArray(value)) {
+            normalizedHeaders[key] = value;
+          }
+        }
+
+        resolve({
+          statusCode: res.statusCode ?? 500,
+          headers: normalizedHeaders,
+          body,
+        });
+      });
+
+      res.on("error", (error: NodeJS.ErrnoException) => {
+        if (isResolved) return;
+        isResolved = true;
+        clearTimer();
         reject(error);
-      }
+      });
     });
 
-    req.setTimeout(timeout, () => {
-      if (!isResolved) {
-        isResolved = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        req.destroy();
-        reject(new Error(`Request timeout after ${timeout}ms`));
-      }
+    const handleTimeout = () => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimer();
+      req.destroy(new Error(`Request timeout after ${timeout}ms`));
+      reject(new Error(`Request timeout after ${timeout}ms`));
+    };
+
+    timeoutId = setTimeout(handleTimeout, timeout);
+
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimer();
+      reject(error);
     });
+
+    req.setTimeout(timeout, handleTimeout);
 
     req.write(data);
     req.end();

@@ -2,6 +2,7 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 
 const updateProjectSchema = z.object({
   title: z.string().optional(),
@@ -20,8 +21,7 @@ export async function GET(
     if (!session) return new NextResponse("Unauthorized", { status: 401 });
 
     const { id } = await ctx.params;
-    const role = session.user?.role;
-    const userId = session.user?.id!;
+    const { role, id: userId } = session.user;
 
     let project = await prisma.project.findUnique({
       where: { id },
@@ -68,7 +68,7 @@ export async function GET(
     );
 
     if (!assetsFolder || !deliverablesFolder) {
-      const foldersToCreate = [];
+      const foldersToCreate: Prisma.FolderCreateManyInput[] = [];
       if (!assetsFolder) {
         foldersToCreate.push({
           name: "Shared Assets",
@@ -122,6 +122,9 @@ export async function GET(
           },
         },
       });
+      if (!project) {
+        return new NextResponse("Not Found", { status: 404 });
+      }
     }
 
     // Check permissions
@@ -156,8 +159,7 @@ export async function PATCH(
   if (!session) return new NextResponse("Unauthorized", { status: 401 });
 
   const { id } = await ctx.params;
-  const role = session.user?.role;
-  const userId = session.user?.id!;
+  const { role, id: userId } = session.user;
 
   try {
     const body = await req.json();
@@ -201,7 +203,7 @@ export async function PATCH(
     return NextResponse.json(updated);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 });
+      return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     return NextResponse.json(
       { error: error.message || "Failed to update project" },

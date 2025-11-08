@@ -5,7 +5,8 @@ import { NextResponse } from "next/server";
 // GET - List all staff (admin only)
 export async function GET() {
   const session = await auth();
-  if (!session || session.user?.role !== "ADMIN")
+  const sessionUser = session?.user;
+  if (!sessionUser || sessionUser.role !== "ADMIN")
     return new NextResponse("Unauthorized", { status: 401 });
 
   const staff = await prisma.user.findMany({
@@ -20,4 +21,3 @@ export async function GET() {
   });
   return NextResponse.json(staff);
 }
-

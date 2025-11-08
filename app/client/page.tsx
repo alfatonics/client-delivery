@@ -8,6 +8,7 @@ type Project = {
   title: string | null;
   description: string | null;
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+  client: { id: string; email: string; name: string | null } | null;
   staff: { id: string; email: string; name: string | null } | null;
   assets: Array<{ id: string; filename: string; type: string }>;
   deliveries: Array<{ id: string; filename: string }>;

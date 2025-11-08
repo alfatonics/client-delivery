@@ -1,5 +1,4 @@
 import { auth } from "@/app/lib/auth";
-import type { SessionUser } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -8,7 +7,7 @@ export async function GET() {
   if (!session) return new NextResponse("Unauthorized", { status: 401 });
 
   // Allow ADMIN and STAFF to fetch clients
-  const sessionUser = session.user as SessionUser | undefined;
+  const sessionUser = session.user;
   if (
     !sessionUser ||
     (sessionUser.role !== "ADMIN" && sessionUser.role !== "STAFF")
