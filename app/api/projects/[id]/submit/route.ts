@@ -61,7 +61,7 @@ export async function POST(
       status: "COMPLETED",
       completionSubmittedAt: new Date(),
       completionSubmittedById: userId,
-    },
+    } as any,
     select: {
       id: true,
       status: true,
