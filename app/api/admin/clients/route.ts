@@ -7,8 +7,11 @@ export async function GET() {
   if (!session) return new NextResponse("Unauthorized", { status: 401 });
 
   // Allow ADMIN and STAFF to fetch clients
-  const role = session.user?.role;
-  if (role !== "ADMIN" && role !== "STAFF") {
+  const sessionUser = session.user as SessionUser | undefined;
+  if (
+    !sessionUser ||
+    (sessionUser.role !== "ADMIN" && sessionUser.role !== "STAFF")
+  ) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
