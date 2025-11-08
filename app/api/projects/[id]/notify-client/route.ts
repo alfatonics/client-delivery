@@ -161,7 +161,7 @@ export async function POST(
       completionNotifiedById: session.user.id,
       completionNotificationEmail: primaryEmail,
       completionNotificationCc: ccList?.join(", ") || null,
-    },
+    } as any,
     include: {
       client: { select: { id: true, email: true, name: true } },
       staff: { select: { id: true, email: true, name: true } },
