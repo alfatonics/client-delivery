@@ -72,11 +72,7 @@ export async function PATCH(
             id: parsed.parentId,
             projectId: id,
           },
-          include: {
-            parent: {
-              select: { id: true },
-            },
-          },
+          select: { id: true },
         });
 
         if (!parentFolder) {
@@ -95,8 +91,7 @@ export async function PATCH(
         }
 
         // Ensure we are not creating a cycle
-        let currentParentId: string | null | undefined =
-          parentFolder.parent?.id;
+        let currentParentId: string | null | undefined = parsed.parentId;
         while (currentParentId) {
           if (currentParentId === folderId) {
             return NextResponse.json(
@@ -104,14 +99,13 @@ export async function PATCH(
               { status: 400 }
             );
           }
-          const ancestor = await prisma.folder.findUnique({
+          const ancestor: { parentId: string | null } | null =
+            await prisma.folder.findUnique({
             where: { id: currentParentId },
-            include: {
-              parent: { select: { id: true } },
-            },
-          });
+            select: { parentId: true },
+            });
           if (!ancestor) break;
-          currentParentId = ancestor.parent?.id;
+          currentParentId = ancestor.parentId ?? null;
         }
 
         parentId = parentFolder.id;
