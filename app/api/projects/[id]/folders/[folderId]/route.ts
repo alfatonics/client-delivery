@@ -1,8 +1,16 @@
-import type { Folder } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
+async function getParentFolderId(folderId: string): Promise<string | null> {
+  const result = await prisma.folder.findUnique({
+    where: { id: folderId },
+    select: { parentId: true },
+  });
+
+  return result?.parentId ?? null;
+}
 
 const updateFolderSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -92,7 +100,7 @@ export async function PATCH(
         }
 
         // Ensure we are not creating a cycle
-        let currentParentId: string | null | undefined = parsed.parentId;
+        let currentParentId: string | null = parsed.parentId ?? null;
         while (currentParentId) {
           if (currentParentId === folderId) {
             return NextResponse.json(
@@ -100,13 +108,7 @@ export async function PATCH(
               { status: 400 }
             );
           }
-          const ancestor: Pick<Folder, "parentId"> | null =
-            await prisma.folder.findUnique({
-            where: { id: currentParentId },
-            select: { parentId: true },
-          });
-          if (!ancestor) break;
-          currentParentId = ancestor.parentId ?? null;
+          currentParentId = await getParentFolderId(currentParentId);
         }
 
         parentId = parentFolder.id;
