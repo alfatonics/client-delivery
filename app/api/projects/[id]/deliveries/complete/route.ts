@@ -25,8 +25,12 @@ export async function POST(
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
 
-  // Only staff assigned to project can upload deliveries
-  if (role !== "STAFF" || project.staffId !== userId) {
+  // Staff must be assigned; admins can proceed
+  if (role !== "STAFF" && role !== "ADMIN") {
+    return new NextResponse("Forbidden", { status: 403 });
+  }
+
+  if (role === "STAFF" && project.staffId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 

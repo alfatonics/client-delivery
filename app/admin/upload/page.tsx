@@ -28,15 +28,23 @@ export default function UploadPage() {
     setBusy(true);
     setError(null);
     try {
+      const contentType = file.type || "application/octet-stream";
       const initRes = await fetch("/api/r2/multipart/init", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           filename: file.name,
-          contentType: file.type,
+          contentType,
           sizeBytes: file.size,
         }),
       });
+      if (!initRes.ok) {
+        const message = await initRes.text();
+        throw new Error(
+          message ||
+            `Upload init failed (${initRes.status} ${initRes.statusText})`
+        );
+      }
       const init = await initRes.json();
       const {
         uploadId,
@@ -66,7 +74,14 @@ export default function UploadPage() {
             },
           }
         );
-        if (!res.ok) throw new Error(`Part ${partNumber} failed`);
+        if (!res.ok) {
+          const message = await res.text();
+          throw new Error(
+            message
+              ? `Part ${partNumber}: ${message}`
+              : `Part ${partNumber} failed (${res.status})`
+          );
+        }
         const data = await res.json();
         etags.push({ ETag: data.etag, PartNumber: partNumber });
       }
@@ -74,9 +89,20 @@ export default function UploadPage() {
       const completeRes = await fetch(completeUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, uploadId, parts: etags, ownerId }),
+        body: JSON.stringify({
+          key,
+          uploadId,
+          parts: etags,
+          ownerId,
+          filename: file.name,
+          contentType,
+          sizeBytes: file.size,
+        }),
       });
-      if (!completeRes.ok) throw new Error("Complete failed");
+      if (!completeRes.ok) {
+        const message = await completeRes.text();
+        throw new Error(message || `Complete failed (${completeRes.status})`);
+      }
 
       router.push("/admin");
     } catch (e: any) {

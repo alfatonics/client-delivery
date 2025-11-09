@@ -47,27 +47,29 @@ export async function POST(
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    // Only STAFF can upload deliveries
-    if (role !== "STAFF") {
+    // Only STAFF (assigned/creator) or ADMIN can upload deliveries
+    if (role !== "STAFF" && role !== "ADMIN") {
       return NextResponse.json(
-        { error: "Only staff can upload deliveries" },
+        { error: "Only staff or admins can upload deliveries" },
         { status: 403 }
       );
     }
 
     // Staff can upload if they are assigned to the project OR if they created the project
-    const canUpload =
-      project.staffId === userId ||
-      (project.createdById !== null && project.createdById === userId);
+    if (role === "STAFF") {
+      const canUpload =
+        project.staffId === userId ||
+        (project.createdById !== null && project.createdById === userId);
 
-    if (!canUpload) {
-      return NextResponse.json(
-        {
-          error:
-            "You can only upload deliveries to projects you are assigned to or created",
-        },
-        { status: 403 }
-      );
+      if (!canUpload) {
+        return NextResponse.json(
+          {
+            error:
+              "You can only upload deliveries to projects you are assigned to or created",
+          },
+          { status: 403 }
+        );
+      }
     }
 
     let body;

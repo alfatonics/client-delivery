@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useState, use, useRef } from "react";
-import type { DragEvent, Dispatch, SetStateAction } from "react";
+import { useEffect, useState, use, useRef, useMemo, useCallback } from "react";
+import type { DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { generateFriendlyPassword } from "@/app/lib/password";
+import { useDriveBrowser } from "@/app/components/drive/browser/useDriveBrowser";
+import DriveBrowserView from "@/app/components/drive/browser/DriveBrowserView";
+import type {
+  DriveDraggableItem,
+  DriveFolder,
+} from "@/app/components/drive/browser/types";
+import DriveFileIcon from "@/app/components/drive/DriveFileIcon";
+import { formatFileSize, isImage, isVideo } from "@/app/lib/drive-utils";
 
 type Asset = {
   id: string;
@@ -39,6 +47,7 @@ type Folder = {
   name: string;
   type: "PROJECT" | "ASSETS" | "DELIVERABLES";
   createdAt: string;
+  parentId: string | null;
   _count: { assets: number; deliveries: number };
 };
 
@@ -76,6 +85,24 @@ type Project = {
   completionNotificationCc?: string | null;
 };
 
+type UploadTaskKind = "asset" | "delivery";
+
+type UploadTask = {
+  id: string;
+  kind: UploadTaskKind;
+  totalFiles: number;
+  currentFileIndex: number;
+  currentFileName: string | null;
+  progress: number;
+  status: "uploading" | "completed" | "error";
+  error?: string;
+};
+
+type PreviewItem =
+  | { kind: "asset"; data: Asset }
+  | { kind: "delivery"; data: Delivery }
+  | null;
+
 export default function ProjectDetailPage({
   params,
 }: {
@@ -89,78 +116,53 @@ export default function ProjectDetailPage({
   const [assigning, setAssigning] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [assetUploadProgress, setAssetUploadProgress] = useState(0);
-  const [assetFiles, setAssetFiles] = useState<File[]>([]);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
-  const [isAssetDragging, setIsAssetDragging] = useState(false);
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<{
-    id: string;
-    role: string;
-  } | null>(null);
-  const [showCreateFolder, setShowCreateFolder] = useState(false);
-  const [folderName, setFolderName] = useState("");
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
-  const [editingFolderName, setEditingFolderName] = useState("");
-  const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"all" | string>("all");
-  const [copied, setCopied] = useState(false);
+  const deliveryInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [notifyEmail, setNotifyEmail] = useState("");
   const [notifyCc, setNotifyCc] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const [notifySuccess, setNotifySuccess] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [currentAssetUploadName, setCurrentAssetUploadName] = useState<
-    string | null
-  >(null);
-  const [currentAssetUploadIndex, setCurrentAssetUploadIndex] = useState(0);
-  const [assetUploadQueueSize, setAssetUploadQueueSize] = useState(0);
-  const totalAssetUploads =
-    assetUploadQueueSize > 0 ? assetUploadQueueSize : assetFiles.length;
+  const [copied, setCopied] = useState(false);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const [deletingDeliveryId, setDeletingDeliveryId] = useState<string | null>(
+    null
+  );
+  const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [previewItem, setPreviewItem] = useState<PreviewItem>(null);
+  const [currentUser, setCurrentUser] = useState<{
+    id: string;
+    role: string;
+  } | null>(null);
   const [sendingStaffEmail, setSendingStaffEmail] = useState(false);
   const [staffEmailError, setStaffEmailError] = useState<string | null>(null);
-  const [staffEmailSuccess, setStaffEmailSuccess] = useState<string | null>(null);
+  const [staffEmailSuccess, setStaffEmailSuccess] = useState<string | null>(
+    null
+  );
 
   const folders: Folder[] = project?.folders ?? [];
+  const assetsList = project?.assets ?? [];
+  const deliveriesList = project?.deliveries ?? [];
 
-  useEffect(() => {
-    fetchData();
-    fetchCurrentUser();
-  }, [id]);
-
-  // Auto-select first ASSETS folder when project loads
-  useEffect(() => {
-    if (project && viewMode === "all" && !selectedFolderId) {
-      const assetsFolder = folders.find((f) => f.type === "ASSETS");
-      if (assetsFolder) {
-        setSelectedFolderId(assetsFolder.id);
-      }
-    }
-  }, [project, viewMode, selectedFolderId, folders]);
-
-  const fetchCurrentUser = async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
-      if (res.ok) {
-        const user = await res.json();
-        setCurrentUser(user);
-      }
-    } catch (e) {
-      console.error("Failed to fetch current user:", e);
-    }
-  };
-
-  const fetchData = async () => {
-    try {
+      const baseUrl =
+        typeof window !== "undefined" ? window.location.origin : "";
+      const projectUrl = `${baseUrl}/api/projects/${id}`;
+      const staffUrl = `${baseUrl}/api/admin/staff`;
       const [projectRes, staffRes] = await Promise.all([
-        fetch(`/api/projects/${id}`),
-        fetch("/api/admin/staff"),
+        fetch(projectUrl, {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        fetch(staffUrl, {
+          credentials: "include",
+          cache: "no-store",
+        }),
       ]);
 
       if (!projectRes.ok) {
@@ -200,7 +202,805 @@ export default function ProjectDetailPage({
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  const driveFolders = useMemo(
+    () =>
+      folders.map((folder) => ({
+        ...folder,
+        parentId: folder.parentId ?? null,
+        _count: folder._count ?? { assets: 0, deliveries: 0 },
+      })),
+    [folders]
+  );
+
+  const driveAssets = useMemo(
+    () =>
+      assetsList.map((asset) => ({
+        id: asset.id,
+        filename: asset.filename,
+        contentType: asset.contentType,
+        sizeBytes: asset.sizeBytes,
+        folderId: asset.folderId ?? null,
+        uploadedBy: asset.uploadedBy ?? null,
+      })),
+    [assetsList]
+  );
+
+  const driveDeliveries = useMemo(
+    () =>
+      deliveriesList.map((delivery) => ({
+        id: delivery.id,
+        filename: delivery.filename,
+        contentType: delivery.contentType,
+        sizeBytes: delivery.sizeBytes,
+        folderId: delivery.folderId ?? null,
+        uploadedAt: delivery.createdAt,
+        uploadedBy: delivery.uploadedBy ?? null,
+      })),
+    [deliveriesList]
+  );
+
+  const handleMoveItem = useCallback(
+    async (item: DriveDraggableItem, targetFolderId: string | null) => {
+      try {
+        setError(null);
+        if (item.kind === "FOLDER") {
+          const res = await fetch(`/api/projects/${id}/folders/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ parentId: targetFolderId ?? null }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to move folder");
+          }
+        } else if (item.kind === "ASSET") {
+          if (targetFolderId) {
+            const targetFolder = folders.find((f) => f.id === targetFolderId);
+            if (targetFolder && targetFolder.type !== "ASSETS") {
+              throw new Error("Assets can only be moved into Assets folders.");
+            }
+          }
+          const res = await fetch(`/api/assets/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folderId: targetFolderId }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to move asset");
+          }
+        } else if (item.kind === "DELIVERY") {
+          if (targetFolderId) {
+            const targetFolder = folders.find((f) => f.id === targetFolderId);
+            if (
+              targetFolder &&
+              targetFolder.type !== "DELIVERABLES" &&
+              targetFolder.type !== "PROJECT"
+            ) {
+              throw new Error(
+                "Deliveries can only be moved into Deliverables or Project folders."
+              );
+            }
+          }
+          const res = await fetch(`/api/deliveries/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folderId: targetFolderId }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to move delivery");
+          }
+        }
+        await fetchData();
+      } catch (e: any) {
+        console.error("Move error:", e);
+        setError(e.message || "Failed to move item");
+      }
+    },
+    [id, folders, fetchData]
+  );
+
+  const handleCreateFolderForBrowser = useCallback(
+    async (name: string, parentId: string | null) => {
+      try {
+        setError(null);
+        const res = await fetch(`/api/projects/${id}/folders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            parentId,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to create folder");
+        }
+        const created = await res.json();
+        await fetchData();
+        return created;
+      } catch (e: any) {
+        console.error("Create folder error:", e);
+        setError(e.message || "Failed to create folder");
+        throw e;
+      }
+    },
+    [id, fetchData]
+  );
+
+  const handleDeleteFolder = useCallback(
+    async (folder: DriveFolder) => {
+      if (
+        !confirm(
+          `Are you sure you want to delete “${folder.name}”? Nested folders and files will move to the parent folder.`
+        )
+      ) {
+        return;
+      }
+      setDeletingFolderId(folder.id);
+      setError(null);
+      try {
+        const res = await fetch(`/api/projects/${id}/folders/${folder.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to delete folder");
+        }
+        await fetchData();
+      } catch (e: any) {
+        console.error("Delete folder error:", e);
+        setError(e.message || "Failed to delete folder");
+      } finally {
+        setDeletingFolderId(null);
+      }
+    },
+    [fetchData, id]
+  );
+
+  const handleRenameFolder = useCallback(
+    async (folder: DriveFolder) => {
+      const suggested = folder.name;
+      const nextName = window.prompt("Rename folder", suggested)?.trim();
+      if (!nextName || nextName === folder.name) {
+        return;
+      }
+      setRenamingFolderId(folder.id);
+      setError(null);
+      try {
+        const res = await fetch(`/api/projects/${id}/folders/${folder.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: nextName }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to rename folder");
+        }
+        await fetchData();
+      } catch (e: any) {
+        console.error("Rename folder error:", e);
+        setError(e.message || "Failed to rename folder");
+      } finally {
+        setRenamingFolderId(null);
+      }
+    },
+    [fetchData, id]
+  );
+
+  const handleCreateFolderClick = useCallback(
+    (parentId: string | null) => {
+      const defaultName = "New Folder";
+      const name = window.prompt("Folder name", defaultName)?.trim();
+      if (!name) return;
+      void handleCreateFolderForBrowser(name, parentId).catch(() => {
+        // errors handled in handler
+      });
+    },
+    [handleCreateFolderForBrowser]
+  );
+
+  const driveBrowser = useDriveBrowser({
+    folders: driveFolders,
+    assets: driveAssets,
+    deliveries: driveDeliveries,
+    canUpload: true,
+    canCreateFolder: true,
+    onMove: handleMoveItem,
+    onCreateFolder: handleCreateFolderForBrowser,
+  });
+
+  const resolveAssetFolderId = useCallback(() => {
+    const activeId = driveBrowser.activeFolderId;
+    if (activeId) {
+      const targetFolder = folders.find((f) => f.id === activeId);
+      if (!targetFolder || targetFolder.type !== "ASSETS") {
+        throw new Error("Select an Assets folder before uploading files.");
+      }
+      return targetFolder.id;
+    }
+
+    const assetsFolder = folders.find((f) => f.type === "ASSETS");
+    if (!assetsFolder) {
+      throw new Error("No Assets folder found. Please contact support.");
+    }
+    return assetsFolder.id;
+  }, [driveBrowser.activeFolderId, folders]);
+
+  const resolveDeliveryFolderId = useCallback(() => {
+    const activeId = driveBrowser.activeFolderId;
+    if (activeId) {
+      const targetFolder = folders.find((f) => f.id === activeId);
+      if (targetFolder) {
+        if (
+          targetFolder.type === "DELIVERABLES" ||
+          targetFolder.type === "PROJECT"
+        ) {
+          return targetFolder.id;
+        }
+        if (targetFolder.type === "ASSETS") {
+          // Allow uploading deliveries into assets only if explicitly chosen later
+          throw new Error(
+            "Select a Deliverables or Project folder before uploading deliveries."
+          );
+        }
+      }
+    }
+    const deliverablesFolder = folders.find((f) => f.type === "DELIVERABLES");
+    if (deliverablesFolder) {
+      return deliverablesFolder.id;
+    }
+    const projectFolder = folders.find((f) => f.type === "PROJECT");
+    if (projectFolder) {
+      return projectFolder.id;
+    }
+    throw new Error(
+      "No Deliverables or Project folder found. Please create a folder first."
+    );
+  }, [driveBrowser.activeFolderId, folders]);
+
+  const uploadAssets = useCallback(
+    async (incoming: FileList | File[]) => {
+      const files =
+        incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+      if (files.length === 0) return;
+
+      let taskId: string | null = null;
+
+      try {
+        const targetFolderId = resolveAssetFolderId();
+        setError(null);
+        taskId = `asset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+        setUploadTasks((previous) => [
+          ...previous,
+          {
+            id: taskId!,
+            kind: "asset",
+            totalFiles: files.length,
+            currentFileIndex: files.length > 0 ? 1 : 0,
+            currentFileName: files[0]?.name ?? null,
+            progress: 0,
+            status: "uploading",
+          },
+        ]);
+
+        const updateTask = (updates: Partial<UploadTask>) => {
+          const id = taskId!;
+          setUploadTasks((previous) =>
+            previous.map((task) =>
+              task.id === id ? { ...task, ...updates } : task
+            )
+          );
+        };
+
+        const scheduleRemoval = (delay: number) => {
+          const id = taskId!;
+          setTimeout(() => {
+            setUploadTasks((previous) =>
+              previous.filter((task) => task.id !== id)
+            );
+          }, delay);
+        };
+
+        for (let index = 0; index < files.length; index++) {
+          const currentFile = files[index];
+          updateTask({
+            currentFileIndex: index + 1,
+            currentFileName: currentFile.name,
+          });
+
+          const initRes = await fetch(`/api/projects/${id}/assets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!initRes.ok) {
+            const errorData = await initRes
+              .json()
+              .catch(() => ({ error: "Failed to initialize upload" }));
+            throw new Error(
+              errorData.error ||
+                `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
+            );
+          }
+
+          const init = await initRes.json();
+          const { uploadId, key, partSize, presignedPartUrls, completeUrl } =
+            init;
+
+          if (
+            !Array.isArray(presignedPartUrls) ||
+            presignedPartUrls.length === 0
+          ) {
+            throw new Error(
+              `Invalid response from server for ${currentFile.name}: missing presigned URLs`
+            );
+          }
+
+          const totalParts = presignedPartUrls.length;
+          const etags: { ETag: string; PartNumber: number }[] = [];
+
+          for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+            const start = (partNumber - 1) * partSize;
+            const end = Math.min(start + partSize, currentFile.size);
+            const blob = currentFile.slice(start, end);
+
+            const res = await fetch(
+              `/api/r2/upload-part?url=${encodeURIComponent(
+                presignedPartUrls[partNumber - 1]
+              )}`,
+              {
+                method: "PUT",
+                body: blob,
+                headers: {
+                  "Content-Type":
+                    currentFile.type || "application/octet-stream",
+                },
+              }
+            );
+
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: ${
+                  errorData.error || res.statusText
+                }`
+              );
+            }
+
+            const data = await res.json();
+            const etag = data.etag;
+            if (!etag) {
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
+              );
+            }
+            etags.push({ ETag: etag, PartNumber: partNumber });
+
+            const progress =
+              ((index + (partNumber - 1) / totalParts) / files.length) * 100;
+            updateTask({
+              progress: Math.min(99, Math.round(progress)),
+              currentFileIndex: index + 1,
+              currentFileName: currentFile.name,
+            });
+          }
+
+          const completeRes = await fetch(completeUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              key,
+              uploadId,
+              parts: etags,
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!completeRes.ok) {
+            const errorData = await completeRes.json().catch(() => ({}));
+            throw new Error(
+              errorData.error ||
+                `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
+            );
+          }
+
+          const completionProgress = ((index + 1) / files.length) * 100;
+          updateTask({
+            progress: Math.round(completionProgress),
+            currentFileIndex: index + 1,
+            currentFileName: currentFile.name,
+          });
+        }
+
+        await fetchData();
+        updateTask({
+          progress: 100,
+          status: "completed",
+          currentFileName: null,
+          currentFileIndex: files.length,
+        });
+        scheduleRemoval(1500);
+      } catch (e: any) {
+        setError(e.message || "Failed to upload assets");
+        if (taskId) {
+          setUploadTasks((previous) =>
+            previous.map((task) =>
+              task.id === taskId
+                ? {
+                    ...task,
+                    status: "error",
+                    error: e.message || "Failed to upload assets",
+                  }
+                : task
+            )
+          );
+          setTimeout(() => {
+            setUploadTasks((previous) =>
+              previous.filter((task) => task.id !== taskId)
+            );
+          }, 4000);
+        }
+      }
+    },
+    [fetchData, id, resolveAssetFolderId]
+  );
+
+  const uploadDeliveries = useCallback(
+    async (incoming: FileList | File[]) => {
+      const files =
+        incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+      if (files.length === 0) return;
+
+      let taskId: string | null = null;
+
+      try {
+        const targetFolderId = resolveDeliveryFolderId();
+        setError(null);
+        taskId = `delivery-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}`;
+
+        setUploadTasks((previous) => [
+          ...previous,
+          {
+            id: taskId!,
+            kind: "delivery",
+            totalFiles: files.length,
+            currentFileIndex: files.length > 0 ? 1 : 0,
+            currentFileName: files[0]?.name ?? null,
+            progress: 0,
+            status: "uploading",
+          },
+        ]);
+
+        const updateTask = (updates: Partial<UploadTask>) => {
+          const id = taskId!;
+          setUploadTasks((previous) =>
+            previous.map((task) =>
+              task.id === id ? { ...task, ...updates } : task
+            )
+          );
+        };
+
+        const scheduleRemoval = (delay: number) => {
+          const id = taskId!;
+          setTimeout(() => {
+            setUploadTasks((previous) =>
+              previous.filter((task) => task.id !== id)
+            );
+          }, delay);
+        };
+
+        for (let index = 0; index < files.length; index++) {
+          const currentFile = files[index];
+          updateTask({
+            currentFileIndex: index + 1,
+            currentFileName: currentFile.name,
+          });
+
+          const initRes = await fetch(`/api/projects/${id}/deliveries`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!initRes.ok) {
+            const errorData = await initRes
+              .json()
+              .catch(() => ({ error: "Failed to initialize upload" }));
+            throw new Error(
+              errorData.error ||
+                `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
+            );
+          }
+
+          const init = await initRes.json();
+          const { uploadId, key, partSize, presignedPartUrls, completeUrl } =
+            init;
+
+          if (
+            !Array.isArray(presignedPartUrls) ||
+            presignedPartUrls.length === 0
+          ) {
+            throw new Error(
+              `Invalid response from server for ${currentFile.name}: missing presigned URLs`
+            );
+          }
+
+          const totalParts = presignedPartUrls.length;
+          const etags: { ETag: string; PartNumber: number }[] = [];
+
+          for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+            const start = (partNumber - 1) * partSize;
+            const end = Math.min(start + partSize, currentFile.size);
+            const blob = currentFile.slice(start, end);
+
+            const res = await fetch(
+              `/api/r2/upload-part?url=${encodeURIComponent(
+                presignedPartUrls[partNumber - 1]
+              )}`,
+              {
+                method: "PUT",
+                body: blob,
+                headers: {
+                  "Content-Type":
+                    currentFile.type || "application/octet-stream",
+                },
+              }
+            );
+
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: ${
+                  errorData.error || res.statusText
+                }`
+              );
+            }
+
+            const data = await res.json();
+            if (!data.etag) {
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
+              );
+            }
+            etags.push({ ETag: data.etag, PartNumber: partNumber });
+
+            const progress =
+              ((index + (partNumber - 1) / totalParts) / files.length) * 100;
+            updateTask({
+              progress: Math.min(99, Math.round(progress)),
+              currentFileIndex: index + 1,
+              currentFileName: currentFile.name,
+            });
+          }
+
+          const completeRes = await fetch(completeUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              key,
+              uploadId,
+              parts: etags,
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!completeRes.ok) {
+            const errorData = await completeRes.json().catch(() => ({}));
+            throw new Error(
+              errorData.error ||
+                `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
+            );
+          }
+
+          const completionProgress = ((index + 1) / files.length) * 100;
+          updateTask({
+            progress: Math.round(completionProgress),
+            currentFileIndex: index + 1,
+            currentFileName: currentFile.name,
+          });
+        }
+
+        await fetchData();
+        updateTask({
+          progress: 100,
+          status: "completed",
+          currentFileName: null,
+          currentFileIndex: files.length,
+        });
+        scheduleRemoval(1500);
+      } catch (e: any) {
+        setError(e.message || "Failed to upload deliveries");
+        if (taskId) {
+          setUploadTasks((previous) =>
+            previous.map((task) =>
+              task.id === taskId
+                ? {
+                    ...task,
+                    status: "error",
+                    error: e.message || "Failed to upload deliveries",
+                  }
+                : task
+            )
+          );
+          setTimeout(() => {
+            setUploadTasks((previous) =>
+              previous.filter((task) => task.id !== taskId)
+            );
+          }, 4000);
+        }
+      }
+    },
+    [fetchData, id, resolveDeliveryFolderId]
+  );
+
+  const handleAssetFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      const files =
+        incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+      if (assetInputRef.current) {
+        assetInputRef.current.value = "";
+      }
+      if (files.length === 0) {
+        return;
+      }
+      void uploadAssets(files);
+    },
+    [uploadAssets]
+  );
+
+  const handleDeliveryFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      const files =
+        incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+      if (deliveryInputRef.current) {
+        deliveryInputRef.current.value = "";
+      }
+      if (files.length === 0) {
+        return;
+      }
+      void uploadDeliveries(files);
+    },
+    [uploadDeliveries]
+  );
+
+  const handleUploadClick = useCallback(() => {
+    setError(null);
+
+    const activeId = driveBrowser.activeFolderId;
+    const activeFolder = activeId
+      ? folders.find((folder) => folder.id === activeId)
+      : null;
+
+    if (activeFolder?.type === "ASSETS") {
+      if (!assetInputRef.current) {
+        setError("File input for assets is not ready. Please reload the page.");
+        return;
+      }
+      assetInputRef.current.click();
+      return;
+    }
+
+    if (
+      activeFolder?.type === "DELIVERABLES" ||
+      activeFolder?.type === "PROJECT"
+    ) {
+      if (!deliveryInputRef.current) {
+        setError(
+          "File input for deliveries is not ready. Please reload the page."
+        );
+        return;
+      }
+      deliveryInputRef.current.click();
+      return;
+    }
+
+    // No explicit folder selected: attempt to resolve a sensible default
+    try {
+      resolveDeliveryFolderId();
+      deliveryInputRef.current?.click();
+      return;
+    } catch (deliveryError: any) {
+      try {
+        resolveAssetFolderId();
+        assetInputRef.current?.click();
+        return;
+      } catch (assetError: any) {
+        setError(
+          deliveryError?.message ||
+            assetError?.message ||
+            "Select a valid folder before uploading files."
+        );
+      }
+    }
+  }, [
+    driveBrowser.activeFolderId,
+    folders,
+    resolveDeliveryFolderId,
+    resolveAssetFolderId,
+  ]);
+
+  const handleUploadDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    []
+  );
+
+  const handleUploadDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) {
+        return;
+      }
+      event.preventDefault();
+      const files = event.dataTransfer.files;
+      if (!files || files.length === 0) return;
+      const activeId = driveBrowser.activeFolderId;
+      const targetFolder = activeId
+        ? folders.find((f) => f.id === activeId)
+        : null;
+      if (targetFolder && targetFolder.type === "ASSETS") {
+        handleAssetFiles(files);
+      } else {
+        handleDeliveryFiles(files);
+      }
+    },
+    [
+      driveBrowser.activeFolderId,
+      folders,
+      handleAssetFiles,
+      handleDeliveryFiles,
+    ]
+  );
+
+  const fetchCurrentUser = useCallback(async () => {
+    try {
+      const baseUrl =
+        typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(`${baseUrl}/api/auth/me`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const user = await res.json();
+        setCurrentUser(user);
+      }
+    } catch (e) {
+      console.error("Failed to fetch current user:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    fetchCurrentUser();
+  }, [fetchData, fetchCurrentUser]);
 
   const assignStaff = async () => {
     setAssigning(true);
@@ -226,230 +1026,6 @@ export default function ProjectDetailPage({
     }
   };
 
-  const createFolder = async () => {
-    if (!folderName.trim()) return;
-    setCreatingFolder(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/projects/${id}/folders`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: folderName.trim() }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to create folder");
-      }
-
-      await fetchData();
-      setFolderName("");
-      setShowCreateFolder(false);
-    } catch (e: any) {
-      setError(e.message || "Failed to create folder");
-    } finally {
-      setCreatingFolder(false);
-    }
-  };
-
-  const updateFolder = async (folderId: string) => {
-    if (!editingFolderName.trim()) return;
-    setCreatingFolder(true);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/projects/${id}/folders/${folderId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editingFolderName.trim() }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to update folder");
-      }
-
-      await fetchData();
-      setEditingFolderId(null);
-      setEditingFolderName("");
-    } catch (e: any) {
-      setError(e.message || "Failed to update folder");
-    } finally {
-      setCreatingFolder(false);
-    }
-  };
-
-  const deleteFolder = async (folderId: string) => {
-    if (
-      !confirm(
-        "Are you sure you want to delete this folder? Assets in this folder will be moved to the root."
-      )
-    )
-      return;
-
-    setDeletingFolderId(folderId);
-    setError(null);
-
-    try {
-      const res = await fetch(`/api/projects/${id}/folders/${folderId}`, {
-        method: "DELETE",
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to delete folder");
-      }
-
-      await fetchData();
-      if (viewMode === folderId) {
-        setViewMode("all");
-      }
-    } catch (e: any) {
-      setError(e.message || "Failed to delete folder");
-    } finally {
-      setDeletingFolderId(null);
-    }
-  };
-
-  const onUploadAsset = async () => {
-    if (assetFiles.length === 0) return;
-    setUploading(true);
-    setError(null);
-    setAssetUploadProgress(0);
-
-    const filesToUpload = [...assetFiles];
-    setAssetUploadQueueSize(filesToUpload.length);
-
-    try {
-      const targetFolderId = resolveAssetFolderId();
-
-      for (let index = 0; index < filesToUpload.length; index++) {
-        const currentFile = filesToUpload[index];
-        setCurrentAssetUploadName(currentFile.name);
-        setCurrentAssetUploadIndex(index + 1);
-
-        const initRes = await fetch(`/api/projects/${id}/assets`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: currentFile.name,
-            contentType: currentFile.type || "application/octet-stream",
-            sizeBytes: currentFile.size,
-            folderId: targetFolderId,
-          }),
-        });
-
-        if (!initRes.ok) {
-          const errorData = await initRes
-            .json()
-            .catch(() => ({ error: "Failed to initialize upload" }));
-          throw new Error(
-            errorData.error ||
-              `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
-          );
-        }
-
-        const init = await initRes.json();
-        const { uploadId, key, partSize, presignedPartUrls, completeUrl } =
-          init;
-
-        if (
-          !Array.isArray(presignedPartUrls) ||
-          presignedPartUrls.length === 0
-        ) {
-          throw new Error(
-            `Invalid response from server for ${currentFile.name}: missing presigned URLs`
-          );
-        }
-
-        const totalParts = presignedPartUrls.length;
-        const etags: { ETag: string; PartNumber: number }[] = [];
-
-        for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-          const start = (partNumber - 1) * partSize;
-          const end = Math.min(start + partSize, currentFile.size);
-          const blob = currentFile.slice(start, end);
-
-          const res = await fetch(
-            `/api/r2/upload-part?url=${encodeURIComponent(
-              presignedPartUrls[partNumber - 1]
-            )}`,
-            {
-              method: "PUT",
-              body: blob,
-              headers: {
-                "Content-Type": currentFile.type || "application/octet-stream",
-              },
-            }
-          );
-
-          if (!res.ok) {
-            const errorData = await res.json().catch(() => ({}));
-            throw new Error(
-              `Part ${partNumber} upload failed for ${currentFile.name}: ${
-                errorData.error || res.statusText
-              }`
-            );
-          }
-
-          const data = await res.json();
-          const etag = data.etag;
-          if (!etag) {
-            throw new Error(
-              `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
-            );
-          }
-          etags.push({ ETag: etag, PartNumber: partNumber });
-
-          const overallProgress =
-            ((index + (partNumber - 1) / totalParts) / filesToUpload.length) *
-            100;
-          setAssetUploadProgress(Math.min(99, Math.round(overallProgress)));
-        }
-
-        const completeRes = await fetch(completeUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            key,
-            uploadId,
-            parts: etags,
-            filename: currentFile.name,
-            contentType: currentFile.type || "application/octet-stream",
-            sizeBytes: currentFile.size,
-            folderId: targetFolderId,
-          }),
-        });
-
-        if (!completeRes.ok) {
-          const errorData = await completeRes.json().catch(() => ({}));
-          throw new Error(
-            errorData.error ||
-              `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
-          );
-        }
-
-        const completionProgress = ((index + 1) / filesToUpload.length) * 100;
-        setAssetUploadProgress(Math.round(completionProgress));
-      }
-
-      await fetchData();
-      setAssetFiles([]);
-      setSelectedFolderId(null);
-      setAssetUploadProgress(100);
-      setTimeout(() => setAssetUploadProgress(0), 500);
-    } catch (e: any) {
-      setError(e.message || "Upload failed");
-      setAssetUploadProgress(0);
-    } finally {
-      setUploading(false);
-      setCurrentAssetUploadName(null);
-      setCurrentAssetUploadIndex(0);
-      setAssetUploadQueueSize(0);
-    }
-  };
-
   const deleteAsset = async (assetId: string) => {
     if (!confirm("Are you sure you want to delete this asset?")) return;
 
@@ -464,6 +1040,23 @@ export default function ProjectDetailPage({
       setError(e.message || "Failed to delete asset");
     } finally {
       setDeletingAssetId(null);
+    }
+  };
+
+  const deleteDelivery = async (deliveryId: string) => {
+    if (!confirm("Are you sure you want to delete this delivery?")) return;
+
+    setDeletingDeliveryId(deliveryId);
+    try {
+      const res = await fetch(`/api/deliveries/${deliveryId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete delivery");
+      await fetchData();
+    } catch (e: any) {
+      setError(e.message || "Failed to delete delivery");
+    } finally {
+      setDeletingDeliveryId(null);
     }
   };
 
@@ -567,6 +1160,150 @@ export default function ProjectDetailPage({
     }
   };
 
+  const previewAsset = useCallback(
+    (asset: { id: string }) => {
+      const full = assetsList.find((item) => item.id === asset.id);
+      if (full) {
+        setPreviewItem({ kind: "asset", data: full });
+      }
+    },
+    [assetsList]
+  );
+
+  const downloadAsset = useCallback((asset: { id: string }) => {
+    window.open(
+      `/api/assets/${asset.id}/download`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
+
+  const previewDelivery = useCallback(
+    (delivery: { id: string }) => {
+      const full = deliveriesList.find((item) => item.id === delivery.id);
+      if (full) {
+        setPreviewItem({ kind: "delivery", data: full });
+      }
+    },
+    [deliveriesList]
+  );
+
+  const closePreview = () => setPreviewItem(null);
+
+  const renderPreview = () => {
+    if (!previewItem) return null;
+
+    const isAssetPreview = previewItem.kind === "asset";
+    const file = previewItem.data;
+    const streamUrl = isAssetPreview
+      ? `/api/assets/${file.id}/stream`
+      : `/api/deliveries/${file.id}/stream`;
+    const downloadUrl = isAssetPreview
+      ? `/api/assets/${file.id}/download`
+      : `/api/deliveries/${file.id}/download`;
+
+    const filename = file.filename;
+    const mimeType = (file.contentType || "").toLowerCase();
+    const canShowImage = isImage(mimeType, filename);
+    const canShowVideo = isVideo(mimeType, filename);
+    const canShowAudio = mimeType.startsWith("audio/");
+
+    let body = (
+      <div className="text-center text-[#5f6368]">
+        <div className="mb-4 flex justify-center">
+          <DriveFileIcon
+            type="OTHER"
+            contentType={mimeType}
+            filename={filename}
+            size={40}
+          />
+        </div>
+        <p>Preview is not available for this file type.</p>
+      </div>
+    );
+
+    if (canShowImage) {
+      body = (
+        <img
+          src={streamUrl}
+          alt={filename}
+          className="max-h-[70vh] max-w-full object-contain"
+        />
+      );
+    } else if (canShowVideo) {
+      body = (
+        <video
+          controls
+          src={streamUrl}
+          className="max-h-[70vh] w-full rounded-lg bg-black"
+        />
+      );
+    } else if (canShowAudio) {
+      body = (
+        <audio controls className="w-full">
+          <source src={streamUrl} type={mimeType || "audio/mpeg"} />
+          Your browser does not support the audio element.
+        </audio>
+      );
+    }
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6"
+        onClick={closePreview}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          className="w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-start justify-between border-b border-[#dadce0] bg-[#f8f9fa] px-6 py-4">
+            <div>
+              <h3 className="text-lg font-medium text-[#202124]">{filename}</h3>
+              <div className="text-sm text-[#5f6368]">
+                {formatFileSize(file.sizeBytes)}
+              </div>
+            </div>
+            <button
+              onClick={closePreview}
+              className="btn-icon text-[#5f6368] hover:text-[#202124]"
+              aria-label="Close preview"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M18 6L6 18M6 6l12 12"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+          <div className="flex max-h-[70vh] items-center justify-center overflow-auto bg-[#f8f9fa] p-6">
+            {body}
+          </div>
+          <div className="flex items-center justify-end gap-3 border-t border-[#dadce0] bg-white px-6 py-4">
+            <a href={downloadUrl} className="btn-secondary" target="_blank">
+              Download
+            </a>
+            <button onClick={closePreview} className="btn-primary">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const downloadDelivery = useCallback((delivery: { id: string }) => {
+    window.open(
+      `/api/deliveries/${delivery.id}/download`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
+
   if (loading) {
     return (
       <div className="drive-container p-8">
@@ -634,120 +1371,15 @@ export default function ProjectDetailPage({
     }
   };
 
-  const fileKey = (file: File) =>
-    `${file.name}-${file.size}-${file.lastModified}`;
-
-  const addFilesToQueue = (
-    incoming: FileList | File[],
-    setQueue: Dispatch<SetStateAction<File[]>>
-  ) => {
-    const filesArray =
-      incoming instanceof FileList ? Array.from(incoming) : [...incoming];
-    if (filesArray.length === 0) {
-      return;
-    }
-    setQueue((prev) => {
-      const existingKeys = new Set(prev.map(fileKey));
-      const nextFiles = filesArray.filter(
-        (candidate) => !existingKeys.has(fileKey(candidate))
-      );
-      return [...prev, ...nextFiles];
-    });
-  };
-
-  const handleAssetFiles = (incoming: FileList | File[]) => {
-    addFilesToQueue(incoming, setAssetFiles);
-    if (assetInputRef.current) {
-      assetInputRef.current.value = "";
-    }
-  };
-
-  const removeAssetFile = (index: number) => {
-    setAssetFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleAssetDragOver = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    if (!isAssetDragging) {
-      setIsAssetDragging(true);
-    }
-  };
-
-  const handleAssetDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsAssetDragging(false);
-    if (event.dataTransfer?.files?.length) {
-      handleAssetFiles(event.dataTransfer.files);
-    }
-  };
-
-  const resolveAssetFolderId = () => {
-    let targetFolderId: string | undefined;
-    if (viewMode !== "all") {
-      const currentFolder = folders.find((f) => f.id === viewMode);
-      if (currentFolder?.type !== "ASSETS") {
-        throw new Error("Assets can only be uploaded to Assets folders");
-      }
-      targetFolderId = viewMode;
-    } else if (!selectedFolderId) {
-      const assetsFolder = folders.find((f) => f.type === "ASSETS");
-      if (!assetsFolder) {
-        throw new Error("No Assets folder found. Please contact support.");
-      }
-      targetFolderId = assetsFolder.id;
-    } else {
-      const selectedFolder = folders.find((f) => f.id === selectedFolderId);
-      if (selectedFolder?.type !== "ASSETS") {
-        throw new Error("Assets can only be uploaded to Assets folders");
-      }
-      targetFolderId = selectedFolderId;
-    }
-
-    if (!targetFolderId) {
-      throw new Error("Unable to determine target folder for assets.");
-    }
-
-    return targetFolderId;
-  };
-
-  const getFileIcon = (type: string, contentType?: string) => {
-    if (type === "IMAGE" || contentType?.startsWith("image/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#4285f4">
-          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" />
-        </svg>
-      );
-    } else if (type === "AUDIO" || contentType?.startsWith("audio/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#ea4335">
-          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-        </svg>
-      );
-    } else if (contentType?.startsWith("video/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#fbbc04">
-          <path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z" />
-        </svg>
-      );
-    }
-    return (
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="#34a853">
-        <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
-      </svg>
-    );
-  };
-
   const submittedAtLabel = formatDateTime(project.completionSubmittedAt);
   const notifiedAtLabel = formatDateTime(project.completionNotifiedAt);
   const canSendEmail = project.status === "COMPLETED";
-  const currentFolder =
-    viewMode !== "all" ? folders.find((f) => f.id === viewMode) || null : null;
+
   return (
     <div className="drive-container">
       {/* Toolbar */}
-      <div className="bg-white border-b border-[#dadce0] px-6 py-4">
-        <div className="flex items-center justify-between max-w-[1800px] mx-auto">
+      <div className="bg-white border-b border-[#dadce0] px-4 lg:px-6 xl:px-10 py-4">
+        <div className="flex items-center justify-between w-full max-w-[1920px] mx-auto">
           <div className="flex items-center gap-4">
             <Link href="/admin" className="btn-icon" title="Back">
               <svg
@@ -789,7 +1421,7 @@ export default function ProjectDetailPage({
       </div>
 
       {/* Content */}
-      <div className="p-6 max-w-[1800px] mx-auto space-y-6">
+      <div className="px-4 lg:px-6 xl:px-10 py-6 w-full max-w-[1920px] mx-auto space-y-6">
         <div className="card space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="font-medium text-[#202124]">
@@ -879,7 +1511,7 @@ export default function ProjectDetailPage({
                 disabled={sendingEmail}
               />
               <p className="text-xs text-[#5f6368] mt-1">
-                Leave blank to use the client’s registered email.
+                Leave blank to use the client's registered email.
               </p>
             </div>
             <div className="md:col-span-2 lg:col-span-3">
@@ -907,7 +1539,7 @@ export default function ProjectDetailPage({
                 </button>
               </div>
               <p className="text-xs text-[#5f6368] mt-1">
-                Provide a password to reset the client’s login and include it in
+                Provide a password to reset the client's login and include it in
                 the email.
               </p>
             </div>
@@ -941,7 +1573,7 @@ export default function ProjectDetailPage({
           <h2 className="font-medium text-[#202124]">Assign Staff</h2>
           <p className="text-sm text-[#5f6368]">
             Choose a team member to manage this project. Assigning automatically
-            moves the project to “In Progress”.
+            moves the project to "In Progress".
           </p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <select
@@ -993,14 +1625,12 @@ export default function ProjectDetailPage({
             <div className="text-sm text-green-600">{staffEmailSuccess}</div>
           )}
         </div>
-
         {project.description && (
           <div className="card">
             <h2 className="font-medium text-[#202124] mb-2">Description</h2>
             <p className="text-[#5f6368]">{project.description}</p>
           </div>
         )}
-
         {/* Client Project Link - Only show for completed projects */}
         {project.status === "COMPLETED" && (
           <div className="card bg-blue-50 border-blue-200">
@@ -1091,626 +1721,137 @@ export default function ProjectDetailPage({
             </div>
           </div>
         )}
-
-        <section>
-          {viewMode === "all" ? (
-            <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-xl font-normal text-[#202124]">
-                  Projects & Assets
-                </h2>
-                <p className="text-sm text-[#5f6368]">
-                  Browse folders to manage shared assets and final deliveries.
-                </p>
-              </div>
-              <div className="flex gap-2 items-center">
-                <div className="relative">
-                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#5f6368]">
-                    <svg
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="m21 21-4.35-4.35"></path>
-                    </svg>
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="Search folders..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 pr-4 py-2 bg-white border border-[#dadce0] rounded-lg text-[#202124] placeholder-[#5f6368] focus:outline-none focus:border-[#1a73e8] focus:shadow-sm transition-all sm:w-64"
-                  />
-                </div>
-                <button
-                  onClick={() => setShowCreateFolder(!showCreateFolder)}
-                  className="btn-secondary text-sm whitespace-nowrap"
-                >
-                  {showCreateFolder ? "Cancel" : "New Folder"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => setViewMode("all")}
-                  className="text-[#1a73e8] hover:underline text-sm"
-                >
-                  ← Back
-                </button>
-                <h2 className="text-xl font-normal text-[#202124]">
-                  {folders.find((f) => f.id === viewMode)?.name || "Folder"}
-                </h2>
-              </div>
-            </div>
-          )}
-
-          {/* Create Folder Form */}
-          {showCreateFolder && viewMode === "all" && (
-            <div className="card mb-4">
-              <h3 className="font-medium text-[#202124] mb-4">
-                Create New Folder
-              </h3>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={folderName}
-                  onChange={(e) => setFolderName(e.target.value)}
-                  placeholder="Folder name"
-                  className="input flex-1"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      createFolder();
-                    }
-                  }}
-                />
-                <button
-                  onClick={createFolder}
-                  disabled={!folderName.trim() || creatingFolder}
-                  className="btn-primary disabled:opacity-50"
-                >
-                  {creatingFolder ? "Creating..." : "Create"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Folder Overview */}
-          {viewMode === "all" && (
-            <div className="space-y-6">
-              {folders.length === 0 && (
-                <div className="text-center py-12 text-[#5f6368]">
-                  No folders yet. Create a folder to organise project files.
-                </div>
-              )}
-
-              {(() => {
-                const filteredFolders = folders.filter((folder) => {
-                  if (!searchQuery.trim()) return true;
-                  return folder.name
-                    .toLowerCase()
-                    .includes(searchQuery.trim().toLowerCase());
-                });
-                const assetsFolder = filteredFolders.find(
-                  (f) => f.type === "ASSETS"
-                );
-                const deliverablesFolder = filteredFolders.find(
-                  (f) => f.type === "DELIVERABLES"
-                );
-                const projectFolders = filteredFolders.filter(
-                  (f) => f.type === "PROJECT"
-                );
-
-                return (
-                  <>
-                    {assetsFolder && (
-                      <div>
-                        <div className="flex items-center gap-2 mb-4">
-                          <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            className="text-[#5f6368]"
-                          >
-                            <path
-                              d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                          <h3 className="text-lg font-medium text-[#202124]">
-                            Shared Assets
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          <div
-                            className="card group cursor-pointer"
-                            onClick={() => {
-                              setViewMode(assetsFolder.id);
-                              setSelectedFolderId(assetsFolder.id);
-                            }}
-                          >
-                            <div className="flex flex-col items-center text-center">
-                              <div className="mb-2">
-                                <svg
-                                  width="48"
-                                  height="48"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <path
-                                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                    fill="#4285f4"
-                                  />
-                                </svg>
-                              </div>
-                              <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                {assetsFolder.name}
-                              </h3>
-                              <div className="text-xs text-[#5f6368]">
-                                {assetsFolder._count.assets} file
-                                {assetsFolder._count.assets !== 1 ? "s" : ""}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {deliverablesFolder && (
-                      <div>
-                        <div className="flex items-center gap-2 mb-4">
-                          <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            className="text-[#5f6368]"
-                          >
-                            <path
-                              d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                          <h3 className="text-lg font-medium text-[#202124]">
-                            Deliverables
-                          </h3>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          <div
-                            className="card group cursor-pointer"
-                            onClick={() => {
-                              setViewMode(deliverablesFolder.id);
-                              setSelectedFolderId(deliverablesFolder.id);
-                            }}
-                          >
-                            <div className="flex flex-col items-center text-center">
-                              <div className="mb-2">
-                                <svg
-                                  width="48"
-                                  height="48"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <path
-                                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                    fill="#10b981"
-                                  />
-                                </svg>
-                              </div>
-                              <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                {deliverablesFolder.name}
-                              </h3>
-                              <div className="text-xs text-[#5f6368]">
-                                {deliverablesFolder._count.deliveries} deliver
-                                {deliverablesFolder._count.deliveries !== 1
-                                  ? "ies"
-                                  : "y"}
-                              </div>
-                            </div>
-                          </div>
-
-                          {projectFolders.map((folder) => (
-                            <div key={folder.id} className="card group">
-                              {editingFolderId === folder.id ? (
-                                <div className="space-y-3">
-                                  <input
-                                    type="text"
-                                    value={editingFolderName}
-                                    onChange={(e) =>
-                                      setEditingFolderName(e.target.value)
-                                    }
-                                    className="input text-sm"
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.preventDefault();
-                                        updateFolder(folder.id);
-                                      }
-                                      if (e.key === "Escape") {
-                                        setEditingFolderId(null);
-                                        setEditingFolderName("");
-                                      }
-                                    }}
-                                    autoFocus
-                                  />
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => updateFolder(folder.id)}
-                                      disabled={creatingFolder}
-                                      className="btn-primary text-xs disabled:opacity-50"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setEditingFolderId(null);
-                                        setEditingFolderName("");
-                                      }}
-                                      className="btn-secondary text-xs"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <>
-                                  <div
-                                    className="flex flex-col items-center text-center cursor-pointer"
-                                    onClick={() => {
-                                      setViewMode(folder.id);
-                                      setSelectedFolderId(folder.id);
-                                    }}
-                                  >
-                                    <div className="mb-2">
-                                      <svg
-                                        width="48"
-                                        height="48"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                      >
-                                        <path
-                                          d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                          fill="#fbbc04"
-                                        />
-                                      </svg>
-                                    </div>
-                                    <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                      {folder.name}
-                                    </h3>
-                                    <div className="text-xs text-[#5f6368] space-y-0.5">
-                                      {folder._count.assets > 0 && (
-                                        <div>
-                                          {folder._count.assets} asset
-                                          {folder._count.assets !== 1
-                                            ? "s"
-                                            : ""}
-                                        </div>
-                                      )}
-                                      {folder._count.deliveries > 0 && (
-                                        <div>
-                                          {folder._count.deliveries} deliver
-                                          {folder._count.deliveries !== 1
-                                            ? "ies"
-                                            : "y"}
-                                        </div>
-                                      )}
-                                      {folder._count.assets === 0 &&
-                                        folder._count.deliveries === 0 && (
-                                          <div>Empty</div>
-                                        )}
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2 justify-center mt-3">
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setEditingFolderId(folder.id);
-                                        setEditingFolderName(folder.name);
-                                      }}
-                                      className="px-2 py-1 text-xs btn-secondary"
-                                      title="Rename folder"
-                                    >
-                                      Rename
-                                    </button>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteFolder(folder.id);
-                                      }}
-                                      disabled={deletingFolderId === folder.id}
-                                      className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
-                                      title="Delete folder"
-                                    >
-                                      {deletingFolderId === folder.id
-                                        ? "Deleting..."
-                                        : "Delete"}
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
-
-          {currentFolder?.type === "ASSETS" && (
-            <div className="card mb-4 space-y-4">
-              <div className="text-sm text-[#5f6368]">
-                Uploading to: <strong>{currentFolder.name}</strong>
-              </div>
-              <div
-                className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
-                  isAssetDragging
-                    ? "border-[#1a73e8] bg-[#e8f0fe]"
-                    : "border-[#dadce0] bg-white"
-                }`}
-                onDragOver={handleAssetDragOver}
-                onDragLeave={() => setIsAssetDragging(false)}
-                onDrop={handleAssetDrop}
-                onClick={() => assetInputRef.current?.click()}
-              >
+        {/* Legacy drive UI retained temporarily */}
+        <section
+          className="space-y-4"
+          onDragOver={handleUploadDragOver}
+          onDrop={handleUploadDrop}
+        >
+          <DriveBrowserView
+            browser={driveBrowser}
+            assets={driveAssets}
+            deliveries={driveDeliveries}
+            onPreviewAsset={previewAsset}
+            onDownloadAsset={downloadAsset}
+            onPreviewDelivery={previewDelivery}
+            onDownloadDelivery={downloadDelivery}
+            onDeleteAsset={(asset) => deleteAsset(asset.id)}
+            onDeleteDelivery={(delivery) => deleteDelivery(delivery.id)}
+            deletingAssetId={deletingAssetId}
+            deletingDeliveryId={deletingDeliveryId}
+            onRenameFolder={handleRenameFolder}
+            onDeleteFolder={handleDeleteFolder}
+            renamingFolderId={renamingFolderId}
+            deletingFolderId={deletingFolderId}
+            onUploadClick={handleUploadClick}
+            onCreateFolderClick={handleCreateFolderClick}
+            extraToolbarContent={
+              <>
                 <input
                   ref={assetInputRef}
                   type="file"
-                  accept="*/*"
                   multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      handleAssetFiles(e.target.files);
+                  accept="*/*"
+                  className="sr-only"
+                  onChange={(event) => {
+                    if (event.target.files) {
+                      handleAssetFiles(event.target.files);
                     }
                   }}
                 />
-                <p className="font-medium text-[#202124]">
-                  Drag & drop files here
-                </p>
-                <p className="text-sm text-[#5f6368]">
-                  or tap to select multiple assets from your device
-                </p>
-                <p className="text-xs text-[#80868b] mt-2">
-                  All file types are supported. Multi-select works on desktop
-                  and mobile.
-                </p>
+                <input
+                  ref={deliveryInputRef}
+                  type="file"
+                  multiple
+                  accept="*/*"
+                  className="sr-only"
+                  onChange={(event) => {
+                    if (event.target.files) {
+                      handleDeliveryFiles(event.target.files);
+                    }
+                  }}
+                />
+              </>
+            }
+            emptyState={
+              <div className="text-sm text-[#5f6368]">
+                No folders or files yet. Use the buttons above to create folders
+                or upload project assets.
               </div>
-              {assetFiles.length > 0 && (
-                <div className="border border-[#dadce0] rounded-lg divide-y divide-[#dadce0]/60 bg-white">
-                  {assetFiles.map((selected, index) => (
-                    <div
-                      key={`${selected.name}-${selected.size}-${selected.lastModified}-${index}`}
-                      className="flex items-center justify-between px-3 py-2 text-sm text-[#202124]"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{selected.name}</p>
-                        <p className="text-xs text-[#5f6368]">
-                          {(selected.size / (1024 * 1024)).toFixed(2)} MB
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeAssetFile(index)}
-                        disabled={uploading}
-                        className="text-xs text-[#1a73e8] hover:underline disabled:opacity-50"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {error && <p className="text-red-600 text-sm">{error}</p>}
-              {uploading && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm text-[#5f6368]">
-                    <span>
-                      Uploading {currentAssetUploadName || "files"} (
-                      {currentAssetUploadIndex}/{Math.max(totalAssetUploads, 1)}
-                      )
-                    </span>
-                    <span>{assetUploadProgress}%</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2.5">
-                    <div
-                      className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                      style={{ width: `${assetUploadProgress}%` }}
-                    ></div>
-                  </div>
-                </div>
-              )}
-              <button
-                onClick={onUploadAsset}
-                disabled={assetFiles.length === 0 || uploading}
-                className="btn-primary disabled:opacity-50"
-              >
-                {uploading
-                  ? "Uploading..."
-                  : assetFiles.length > 0
-                  ? `Upload ${assetFiles.length} Asset${
-                      assetFiles.length === 1 ? "" : "s"
-                    }`
-                  : "Upload Assets"}
-              </button>
-            </div>
-          )}
+            }
+          />
 
-          {viewMode !== "all" && currentFolder?.type === "ASSETS" && (
-            <div>
-              {(() => {
-                const folderAssets = project.assets.filter(
-                  (a) => a.folderId === currentFolder.id
+          {uploadTasks.length > 0 && (
+            <div className="space-y-3">
+              {uploadTasks.map((task) => {
+                const currentIndex = Math.max(
+                  0,
+                  Math.min(task.currentFileIndex, task.totalFiles)
                 );
-                if (folderAssets.length === 0) {
-                  return (
-                    <div className="text-center py-12 text-[#5f6368]">
-                      No assets in this folder yet.
-                    </div>
-                  );
-                }
+                const baseLabel =
+                  task.kind === "asset" ? "Asset upload" : "Delivery upload";
+                const statusLabel =
+                  task.status === "completed"
+                    ? "Completed"
+                    : task.status === "error"
+                    ? "Failed"
+                    : "Uploading";
+                const colorClass =
+                  task.status === "error"
+                    ? "bg-[#d93025]"
+                    : task.kind === "asset"
+                    ? "bg-[#1a73e8]"
+                    : "bg-[#34a853]";
+
                 return (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                    {folderAssets.map((asset) => {
-                      const canDelete =
-                        currentUser?.role === "ADMIN" ||
-                        asset.uploadedBy?.id === currentUser?.id;
-                      const canView =
-                        asset.type === "IMAGE" ||
-                        asset.type === "AUDIO" ||
-                        asset.contentType?.startsWith("image/") ||
-                        asset.contentType?.startsWith("audio/") ||
-                        asset.contentType?.startsWith("video/");
-
-                      return (
-                        <div key={asset.id} className="card group">
-                          <div className="flex flex-col items-center text-center mb-3">
-                            <div className="mb-2">
-                              {getFileIcon(asset.type, asset.contentType)}
-                            </div>
-                            <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                              {asset.filename}
-                            </h3>
-                            <div className="text-xs text-[#5f6368] mb-1">
-                              {asset.type} •{" "}
-                              {(asset.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                            </div>
-                            {asset.uploadedBy && (
-                              <div
-                                className="text-xs text-[#80868b] truncate w-full"
-                                title={asset.uploadedBy.email}
-                              >
-                                {asset.uploadedBy.email}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex gap-2 justify-center flex-wrap">
-                            {canView && (
-                              <Link
-                                href={`/api/assets/${asset.id}/stream`}
-                                target="_blank"
-                                className="px-3 py-1.5 btn-primary text-xs no-underline"
-                              >
-                                View
-                              </Link>
-                            )}
-                            <Link
-                              href={`/api/assets/${asset.id}/download`}
-                              className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                            >
-                              Download
-                            </Link>
-                            {canDelete && (
-                              <button
-                                onClick={() => deleteAsset(asset.id)}
-                                disabled={deletingAssetId === asset.id}
-                                className="px-3 py-1.5 bg-red-600 text-white rounded text-xs disabled:opacity-50 border-none cursor-pointer hover:bg-red-700"
-                              >
-                                {deletingAssetId === asset.id
-                                  ? "Deleting..."
-                                  : "Delete"}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div
+                    key={task.id}
+                    className="rounded-lg border border-[#dadce0] bg-white px-4 py-3 shadow-sm"
+                  >
+                    <div className="flex flex-col gap-1 text-sm text-[#202124] sm:flex-row sm:items-center sm:justify-between">
+                      <span className="leading-snug">
+                        {statusLabel} {baseLabel}
+                        {task.totalFiles > 0 && (
+                          <>
+                            {" "}
+                            ({currentIndex}/{task.totalFiles})
+                          </>
+                        )}
+                        {task.currentFileName ? (
+                          <>
+                            {" · "}
+                            <span className="font-medium">
+                              {task.currentFileName}
+                            </span>
+                          </>
+                        ) : null}
+                      </span>
+                      <span>{Math.max(0, Math.min(100, task.progress))}%</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-[#e8eaed]">
+                      <div
+                        className={`h-2 rounded-full ${colorClass} transition-all`}
+                        style={{
+                          width: `${Math.max(
+                            0,
+                            Math.min(100, task.progress)
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    {task.error && (
+                      <p className="mt-2 text-xs text-[#d93025]">
+                        {task.error}
+                      </p>
+                    )}
                   </div>
                 );
-              })()}
+              })}
             </div>
           )}
-        </section>
-
-        <section>
-          {currentFolder &&
-          (currentFolder.type === "DELIVERABLES" ||
-            currentFolder.type === "PROJECT") ? (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-normal text-[#202124]">
-                  Deliveries in {currentFolder.name}
-                </h2>
-                <button
-                  onClick={() => setViewMode("all")}
-                  className="text-[#1a73e8] hover:underline text-sm"
-                >
-                  View all folders
-                </button>
-              </div>
-              {(() => {
-                const folderDeliveries = project.deliveries.filter(
-                  (d) => d.folderId === currentFolder.id
-                );
-                return folderDeliveries.length === 0 ? (
-                  <div className="text-center py-12 text-[#5f6368]">
-                    No deliveries in this folder yet.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {folderDeliveries.map((delivery) => (
-                      <div key={delivery.id} className="card group">
-                        <div className="flex flex-col items-center text-center mb-3">
-                          <div className="mb-2">
-                            <svg
-                              width="40"
-                              height="40"
-                              viewBox="0 0 24 24"
-                              fill="#ea4335"
-                            >
-                              <path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z" />
-                            </svg>
-                          </div>
-                          <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                            {delivery.filename}
-                          </h3>
-                          <div className="text-xs text-[#5f6368] mb-1">
-                            {(delivery.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                          </div>
-                          <div
-                            className="text-xs text-[#80868b] truncate w-full"
-                            title={delivery.uploadedBy.email}
-                          >
-                            {delivery.uploadedBy.email}
-                          </div>
-                          <div className="text-xs text-[#80868b] mt-1">
-                            {new Date(delivery.createdAt).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <div className="flex gap-2 justify-center">
-                          <Link
-                            href={`/api/deliveries/${delivery.id}/stream`}
-                            className="px-3 py-1.5 btn-primary text-xs no-underline"
-                          >
-                            Watch
-                          </Link>
-                          <Link
-                            href={`/api/deliveries/${delivery.id}/download`}
-                            className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                          >
-                            Download
-                          </Link>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </>
-          ) : null}
         </section>
       </div>
+      {renderPreview()}
     </div>
   );
 }

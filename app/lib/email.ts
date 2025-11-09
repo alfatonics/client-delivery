@@ -340,10 +340,7 @@ export async function sendProjectAssignmentEmail(options: {
           <p style="margin:0 0 12px;font-weight:600;">Additional context</p>
           <p style="margin:0;white-space:pre-wrap;">${options.notes
             .trim()
-            .replace(
-              /\n/g,
-              "<br/>"
-            )}</p>
+            .replace(/\n/g, "<br/>")}</p>
         </div>`
       : "";
 
@@ -385,9 +382,9 @@ export async function sendProjectAssignmentEmail(options: {
     textLines.push(
       "",
       "Client:",
-      `- ${[options.clientName, options.clientEmail].filter(Boolean).join(
-        " · "
-      )}`
+      `- ${[options.clientName, options.clientEmail]
+        .filter(Boolean)
+        .join(" · ")}`
     );
   }
 
@@ -395,11 +392,7 @@ export async function sendProjectAssignmentEmail(options: {
     textLines.push("", `Assigned by: ${options.createdByName}`);
   }
 
-  textLines.push(
-    "",
-    `Portal link: ${staffProjectUrl}`,
-    ""
-  );
+  textLines.push("", `Portal link: ${staffProjectUrl}`, "");
 
   if (options.notes && options.notes.trim().length > 0) {
     textLines.push("Additional context:", options.notes.trim(), "");

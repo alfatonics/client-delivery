@@ -5,6 +5,7 @@ import { z } from "zod";
 
 const updateFolderSchema = z.object({
   name: z.string().min(1).max(255).optional(),
+  parentId: z.string().min(1).optional().nullable(),
 });
 
 // PATCH - Update folder
@@ -53,14 +54,71 @@ export async function PATCH(
       return NextResponse.json({ error: "Folder not found" }, { status: 404 });
     }
 
+    if (parsed.parentId === folderId) {
+      return NextResponse.json(
+        { error: "Folder cannot be its own parent" },
+        { status: 400 }
+      );
+    }
+
+    let parentId: string | null | undefined = undefined;
+
+    if (parsed.parentId !== undefined) {
+      if (parsed.parentId === null) {
+        parentId = null;
+      } else {
+        const parentFolder = await prisma.folder.findFirst({
+          where: {
+            id: parsed.parentId,
+            projectId: id,
+          },
+        });
+
+        if (!parentFolder) {
+          return NextResponse.json(
+            { error: "Parent folder not found" },
+            { status: 404 }
+          );
+        }
+
+        // Prevent circular hierarchy by ensuring parent isn't a descendant
+        if (parentFolder.id === folderId) {
+          return NextResponse.json(
+            { error: "Folder cannot be moved into itself" },
+            { status: 400 }
+          );
+        }
+
+        // Ensure we are not creating a cycle
+        let currentParentId: string | null | undefined = parentFolder.parentId;
+        while (currentParentId) {
+          if (currentParentId === folderId) {
+            return NextResponse.json(
+              { error: "Cannot move folder into its descendant" },
+              { status: 400 }
+            );
+          }
+          const ancestor = await prisma.folder.findUnique({
+            where: { id: currentParentId },
+            select: { parentId: true },
+          });
+          if (!ancestor) break;
+          currentParentId = ancestor.parentId;
+        }
+
+        parentId = parentFolder.id;
+      }
+    }
+
     const updated = await prisma.folder.update({
       where: { id: folderId },
       data: {
         ...(parsed.name && { name: parsed.name }),
+        ...(parentId !== undefined && { parentId }),
       },
       include: {
         _count: {
-          select: { assets: true },
+          select: { assets: true, deliveries: true },
         },
       },
     });

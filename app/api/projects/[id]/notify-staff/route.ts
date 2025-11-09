@@ -31,9 +31,7 @@ export async function POST(
 
   let parsedBody: { notes?: string };
   try {
-    const json = await req
-      .json()
-      .catch(() => ({}));
+    const json = await req.json().catch(() => ({}));
     parsedBody = payloadSchema.parse(json);
   } catch (error) {
     if (error instanceof z.ZodError) {

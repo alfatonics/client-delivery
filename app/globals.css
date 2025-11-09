@@ -25,6 +25,12 @@ body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 /* Drive Container */
 .drive-container {
   min-height: calc(100vh - 4rem);

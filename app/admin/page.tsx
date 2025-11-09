@@ -68,7 +68,7 @@ export default async function AdminPage() {
     <div className="drive-container">
       {/* Toolbar */}
       <div className="bg-white border-b border-[#dadce0] px-6 py-4">
-        <div className="flex items-center justify-between max-w-[1800px] mx-auto">
+        <div className="flex items-center justify-between w-full max-w-[1920px] mx-auto">
           <h1 className="text-2xl font-normal text-[#202124]">
             Admin Dashboard
           </h1>
@@ -87,7 +87,7 @@ export default async function AdminPage() {
       </div>
 
       {/* Content */}
-      <div className="p-6 max-w-[1800px] mx-auto space-y-6">
+      <div className="p-6 w-full max-w-[1920px] mx-auto space-y-6">
         {/* Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="card">

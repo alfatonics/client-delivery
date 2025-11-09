@@ -6,6 +6,7 @@ import { z } from "zod";
 const createFolderSchema = z.object({
   name: z.string().min(1).max(255),
   type: z.enum(["PROJECT", "ASSETS", "DELIVERABLES"]).default("PROJECT"),
+  parentId: z.string().min(1).optional().nullable(),
 });
 
 // GET - List folders in a project
@@ -98,9 +99,24 @@ export async function POST(
     const body = await req.json();
     const parsed = createFolderSchema.parse(body);
 
-    // Only allow creating PROJECT type folders (subfolders)
-    // ASSETS and DELIVERABLES are auto-created and can't be manually created
-    if (parsed.type === "ASSETS" || parsed.type === "DELIVERABLES") {
+    let targetType = parsed.type;
+    let parentId: string | null = parsed.parentId ?? null;
+
+    if (parentId) {
+      const parentFolder = await prisma.folder.findFirst({
+        where: { id: parentId, projectId: id },
+        select: { id: true, type: true },
+      });
+
+      if (!parentFolder) {
+        return NextResponse.json(
+          { error: "Parent folder not found" },
+          { status: 404 }
+        );
+      }
+
+      targetType = parentFolder.type;
+    } else if (targetType === "ASSETS" || targetType === "DELIVERABLES") {
       return NextResponse.json(
         {
           error:
@@ -113,8 +129,9 @@ export async function POST(
     const folder = await prisma.folder.create({
       data: {
         name: parsed.name,
-        type: parsed.type,
+        type: targetType,
         projectId: id,
+        parentId,
       },
       include: {
         _count: {

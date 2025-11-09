@@ -91,6 +91,9 @@ model Folder {
   type        FolderType @default(PROJECT) // PROJECT au ASSETS
   projectId   String
   project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentId    String?
+  parent      Folder?    @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Folder[]   @relation("FolderHierarchy")
   assets      Asset[]
   deliveries  Delivery[]
   createdAt   DateTime   @default(now())

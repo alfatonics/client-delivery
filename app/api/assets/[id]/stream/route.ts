@@ -44,3 +44,4 @@ export async function GET(
   return NextResponse.redirect(url, { status: 302 });
 }
 
+

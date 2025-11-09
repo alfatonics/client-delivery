@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, use, useRef, useMemo, useCallback } from "react";
 import Link from "next/link";
+import DriveFileIcon from "@/app/components/drive/DriveFileIcon";
+import DriveBrowserView from "@/app/components/drive/browser/DriveBrowserView";
+import { useDriveBrowser } from "@/app/components/drive/browser/useDriveBrowser";
+import type {
+  DriveAsset,
+  DriveDelivery,
+  DriveFolder,
+} from "@/app/components/drive/browser/types";
+import { formatFileSize, isImage, isVideo } from "@/app/lib/drive-utils";
 
 type Asset = {
   id: string;
@@ -12,8 +20,7 @@ type Asset = {
   type: string;
   createdAt: string;
   folderId?: string | null;
-  folder?: { id: string; name: string } | null;
-  uploadedBy?: { id: string; email: string; name: string | null };
+  uploadedBy?: { id: string; email: string; name: string | null } | null;
 };
 
 type Delivery = {
@@ -23,8 +30,7 @@ type Delivery = {
   sizeBytes: number;
   createdAt: string;
   folderId?: string | null;
-  folder?: { id: string; name: string } | null;
-  uploadedBy: { id: string; email: string; name: string | null };
+  uploadedBy: { id: string; email: string; name: string | null } | null;
 };
 
 type Folder = {
@@ -32,6 +38,7 @@ type Folder = {
   name: string;
   type: "PROJECT" | "ASSETS" | "DELIVERABLES";
   createdAt: string;
+  parentId: string | null;
   _count: { assets: number; deliveries: number };
 };
 
@@ -47,48 +54,65 @@ type Project = {
   folders: Folder[];
 };
 
+type PreviewItem =
+  | { kind: "asset"; data: Asset }
+  | { kind: "delivery"; data: Delivery }
+  | null;
+
 export default function ClientProjectPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const router = useRouter();
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [uploadingAssets, setUploadingAssets] = useState(false);
+  const [assetUploadProgress, setAssetUploadProgress] = useState(0);
+  const [assetUploadTotal, setAssetUploadTotal] = useState(0);
+  const [currentAssetUploadName, setCurrentAssetUploadName] = useState<
+    string | null
+  >(null);
+  const [currentAssetUploadIndex, setCurrentAssetUploadIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const assetInputRef = useRef<HTMLInputElement | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<{
     id: string;
     role: string;
   } | null>(null);
-  const [viewMode, setViewMode] = useState<"all" | string>("all"); // "all" or folderId
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterType, setFilterType] = useState<
-    "all" | "PROJECT" | "ASSETS" | "DELIVERABLES"
-  >("all");
+  const [previewItem, setPreviewItem] = useState<PreviewItem>(null);
 
-  useEffect(() => {
-    fetchProject();
-    fetchCurrentUser();
+  const fetchProject = useCallback(async () => {
+    try {
+      setLoading(true);
+      const baseUrl =
+        typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(`${baseUrl}/api/projects/${id}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to fetch project");
+      }
+      const data = await res.json();
+      setProject(data);
+    } catch (e: any) {
+      setError(e.message || "Failed to fetch project");
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
-  // Auto-select first ASSETS folder when project loads
-  useEffect(() => {
-    if (project && viewMode === "all" && !selectedFolderId) {
-      const assetsFolder = project.folders.find((f) => f.type === "ASSETS");
-      if (assetsFolder) {
-        setSelectedFolderId(assetsFolder.id);
-      }
-    }
-  }, [project, viewMode, selectedFolderId]);
-
-  const fetchCurrentUser = async () => {
+  const fetchCurrentUser = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const baseUrl =
+        typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(`${baseUrl}/api/auth/me`, {
+        credentials: "include",
+        cache: "no-store",
+      });
       if (res.ok) {
         const user = await res.json();
         setCurrentUser(user);
@@ -96,140 +120,438 @@ export default function ClientProjectPage({
     } catch (e) {
       console.error("Failed to fetch current user:", e);
     }
-  };
+  }, []);
 
-  const fetchProject = async () => {
-    try {
-      const res = await fetch(`/api/projects/${id}`);
-      if (!res.ok) throw new Error("Failed to fetch project");
-      const data = await res.json();
-      setProject(data);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    void fetchProject();
+    void fetchCurrentUser();
+  }, [fetchProject, fetchCurrentUser]);
+
+  const folders = project?.folders ?? [];
+  const assetsList = project?.assets ?? [];
+  const deliveriesList = project?.deliveries ?? [];
+
+  const driveFolders = useMemo<DriveFolder[]>(
+    () =>
+      folders.map((folder) => ({
+        id: folder.id,
+        name: folder.name,
+        parentId: folder.parentId ?? null,
+        type: folder.type,
+        createdAt: folder.createdAt,
+        _count: folder._count,
+      })),
+    [folders]
+  );
+
+  const driveAssets = useMemo<DriveAsset[]>(
+    () =>
+      assetsList.map((asset) => ({
+        id: asset.id,
+        filename: asset.filename,
+        contentType: asset.contentType,
+        sizeBytes: asset.sizeBytes,
+        folderId: asset.folderId ?? null,
+        uploadedAt: asset.createdAt,
+        uploadedBy: asset.uploadedBy ?? null,
+      })),
+    [assetsList]
+  );
+
+  const driveDeliveries = useMemo<DriveDelivery[]>(
+    () =>
+      deliveriesList.map((delivery) => ({
+        id: delivery.id,
+        filename: delivery.filename,
+        contentType: delivery.contentType,
+        sizeBytes: delivery.sizeBytes,
+        folderId: delivery.folderId ?? null,
+        uploadedAt: delivery.createdAt,
+        uploadedBy: delivery.uploadedBy ?? null,
+      })),
+    [deliveriesList]
+  );
+
+  const driveBrowser = useDriveBrowser({
+    folders: driveFolders,
+    assets: driveAssets,
+    deliveries: driveDeliveries,
+    canUpload: true,
+    canCreateFolder: false,
+  });
+
+  const { activeFolderId, setActiveFolderId } = driveBrowser;
+
+  useEffect(() => {
+    if (!project || activeFolderId) return;
+    const defaultFolder =
+      project.folders.find((f) => f.type === "ASSETS") ?? project.folders[0];
+    if (defaultFolder) {
+      setActiveFolderId(defaultFolder.id);
     }
-  };
+  }, [project, activeFolderId, setActiveFolderId]);
 
-  const deleteAsset = async (assetId: string) => {
-    if (!confirm("Are you sure you want to delete this asset?")) return;
-
-    setDeletingAssetId(assetId);
-    try {
-      const res = await fetch(`/api/assets/${assetId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error("Failed to delete asset");
-      await fetchProject();
-    } catch (e: any) {
-      setError(e.message || "Failed to delete asset");
-    } finally {
-      setDeletingAssetId(null);
-    }
-  };
-
-  const onUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    setError(null);
-
-    try {
-      // Determine target folder for assets (must be ASSETS folder)
-      let targetFolderId: string | undefined;
-      if (viewMode !== "all") {
-        const currentFolder = project?.folders.find((f) => f.id === viewMode);
-        if (currentFolder?.type !== "ASSETS") {
-          throw new Error("Assets can only be uploaded to Assets folders");
-        }
-        targetFolderId = viewMode;
-      } else {
-        if (!selectedFolderId) {
-          // Auto-select first ASSETS folder if none selected
-          const assetsFolder = project?.folders.find(
-            (f) => f.type === "ASSETS"
-          );
-          if (!assetsFolder) {
-            throw new Error("No Assets folder found. Please contact support.");
-          }
-          targetFolderId = assetsFolder.id;
-        } else {
-          const selectedFolder = project?.folders.find(
-            (f) => f.id === selectedFolderId
-          );
-          if (selectedFolder?.type !== "ASSETS") {
-            throw new Error("Assets can only be uploaded to Assets folders");
-          }
-          targetFolderId = selectedFolderId;
-        }
+  const resolveAssetFolderId = useCallback(() => {
+    if (activeFolderId) {
+      const folder = folders.find((f) => f.id === activeFolderId);
+      if (!folder || folder.type !== "ASSETS") {
+        throw new Error("Select an Assets folder before uploading files.");
       }
+      return folder.id;
+    }
+    const assetsFolder = folders.find((f) => f.type === "ASSETS");
+    if (!assetsFolder) {
+      throw new Error("No Assets folder found. Please contact support.");
+    }
+    return assetsFolder.id;
+  }, [activeFolderId, folders]);
 
-      const initRes = await fetch(`/api/projects/${id}/assets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          sizeBytes: file.size,
-          folderId: targetFolderId,
-        }),
-      });
-      const init = await initRes.json();
-      const {
-        uploadId,
-        key,
-        partSize,
-        presignedPartUrls,
-        completeUrl,
-        folderId: returnedFolderId,
-      } = init;
+  const uploadAssets = useCallback(
+    async (incoming: FileList | File[]) => {
+      const files =
+        incoming instanceof FileList ? Array.from(incoming) : [...incoming];
+      if (files.length === 0) return;
 
-      const totalParts = presignedPartUrls.length;
-      const etags: { ETag: string; PartNumber: number }[] = [];
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        const start = (partNumber - 1) * partSize;
-        const end = Math.min(start + partSize, file.size);
-        const blob = file.slice(start, end);
-        // Use proxy route to avoid CORS issues
-        const res = await fetch(
-          `/api/r2/upload-part?url=${encodeURIComponent(
-            presignedPartUrls[partNumber - 1]
-          )}`,
-          {
-            method: "PUT",
-            body: blob,
-            headers: {
-              "Content-Type": file.type || "application/octet-stream",
-            },
+      try {
+        const targetFolderId = resolveAssetFolderId();
+        setUploadingAssets(true);
+        setError(null);
+        setAssetUploadTotal(files.length);
+        setAssetUploadProgress(0);
+
+        for (let index = 0; index < files.length; index++) {
+          const currentFile = files[index];
+          setCurrentAssetUploadName(currentFile.name);
+          setCurrentAssetUploadIndex(index + 1);
+
+          const initRes = await fetch(`/api/projects/${id}/assets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!initRes.ok) {
+            const errorData = await initRes
+              .json()
+              .catch(() => ({ error: "Failed to initialize upload" }));
+            throw new Error(
+              errorData.error ||
+                `Upload initialization failed for ${currentFile.name}: ${initRes.status}`
+            );
           }
+
+          const init = await initRes.json();
+          const { uploadId, key, partSize, presignedPartUrls, completeUrl } =
+            init;
+
+          if (
+            !Array.isArray(presignedPartUrls) ||
+            presignedPartUrls.length === 0
+          ) {
+            throw new Error(
+              `Invalid response from server for ${currentFile.name}: missing presigned URLs`
+            );
+          }
+
+          const totalParts = presignedPartUrls.length;
+          const etags: { ETag: string; PartNumber: number }[] = [];
+
+          for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+            const start = (partNumber - 1) * partSize;
+            const end = Math.min(start + partSize, currentFile.size);
+            const blob = currentFile.slice(start, end);
+
+            const res = await fetch(
+              `/api/r2/upload-part?url=${encodeURIComponent(
+                presignedPartUrls[partNumber - 1]
+              )}`,
+              {
+                method: "PUT",
+                body: blob,
+                headers: {
+                  "Content-Type":
+                    currentFile.type || "application/octet-stream",
+                },
+              }
+            );
+
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: ${
+                  errorData.error || res.statusText
+                }`
+              );
+            }
+
+            const data = await res.json();
+            if (!data.etag) {
+              throw new Error(
+                `Part ${partNumber} upload failed for ${currentFile.name}: no ETag received`
+              );
+            }
+            etags.push({ ETag: data.etag, PartNumber: partNumber });
+
+            const overallProgress =
+              ((index + (partNumber - 1) / totalParts) / files.length) * 100;
+            setAssetUploadProgress(Math.min(99, Math.round(overallProgress)));
+          }
+
+          const completeRes = await fetch(completeUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              key,
+              uploadId,
+              parts: etags,
+              filename: currentFile.name,
+              contentType: currentFile.type || "application/octet-stream",
+              sizeBytes: currentFile.size,
+              folderId: targetFolderId,
+            }),
+          });
+
+          if (!completeRes.ok) {
+            const errorData = await completeRes.json().catch(() => ({}));
+            throw new Error(
+              errorData.error ||
+                `Upload completion failed for ${currentFile.name}: ${completeRes.status}`
+            );
+          }
+
+          const completionProgress = ((index + 1) / files.length) * 100;
+          setAssetUploadProgress(Math.round(completionProgress));
+        }
+
+        await fetchProject();
+        setAssetUploadProgress(100);
+        setTimeout(() => setAssetUploadProgress(0), 400);
+      } catch (e: any) {
+        console.error("Asset upload error:", e);
+        setError(e.message || "Failed to upload assets");
+        setAssetUploadProgress(0);
+      } finally {
+        setUploadingAssets(false);
+        setCurrentAssetUploadName(null);
+        setCurrentAssetUploadIndex(0);
+        setAssetUploadTotal(0);
+      }
+    },
+    [fetchProject, id, resolveAssetFolderId]
+  );
+
+  const handleAssetFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      if (assetInputRef.current) {
+        assetInputRef.current.value = "";
+      }
+      void uploadAssets(incoming);
+    },
+    [uploadAssets]
+  );
+
+  const handleUploadClick = useCallback(() => {
+    try {
+      setError(null);
+
+      if (!activeFolderId) {
+        const hasAssetsFolder = folders.some(
+          (folder) => folder.type === "ASSETS"
         );
-        if (!res.ok) throw new Error(`Part ${partNumber} failed`);
-        const data = await res.json();
-        etags.push({ ETag: data.etag, PartNumber: partNumber });
+        if (!hasAssetsFolder) {
+          throw new Error("No Assets folder found. Please contact support.");
+        }
+        assetInputRef.current?.click();
+        return;
       }
 
-      const completeRes = await fetch(completeUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key,
-          uploadId,
-          parts: etags,
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          sizeBytes: file.size,
-          folderId: targetFolderId,
-        }),
-      });
-      if (!completeRes.ok) throw new Error("Complete failed");
+      const targetFolder = folders.find(
+        (folder) => folder.id === activeFolderId
+      );
+      if (!targetFolder) {
+        throw new Error(
+          "Selected folder is no longer available. Reload the page and try again."
+        );
+      }
+      if (targetFolder.type !== "ASSETS") {
+        throw new Error("Select an Assets folder before uploading files.");
+      }
 
-      await fetchProject();
-      setFile(null);
-      setSelectedFolderId(null);
+      assetInputRef.current?.click();
     } catch (e: any) {
-      setError(e.message || "Upload failed");
-    } finally {
-      setUploading(false);
+      setError(e.message || "Select an Assets folder before uploading files.");
     }
+  }, [activeFolderId, folders]);
+
+  const handlePreviewAsset = useCallback(
+    (asset: DriveAsset) => {
+      const full = assetsList.find((item) => item.id === asset.id);
+      if (full) {
+        setPreviewItem({ kind: "asset", data: full });
+      }
+    },
+    [assetsList]
+  );
+
+  const handlePreviewDelivery = useCallback(
+    (delivery: DriveDelivery) => {
+      const full = deliveriesList.find((item) => item.id === delivery.id);
+      if (full) {
+        setPreviewItem({ kind: "delivery", data: full });
+      }
+    },
+    [deliveriesList]
+  );
+
+  const handleDownloadAsset = useCallback((asset: DriveAsset) => {
+    window.open(
+      `/api/assets/${asset.id}/download`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
+
+  const handleDownloadDelivery = useCallback((delivery: DriveDelivery) => {
+    window.open(
+      `/api/deliveries/${delivery.id}/download`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, []);
+
+  const handleDeleteAsset = useCallback(
+    async (asset: DriveAsset) => {
+      if (!confirm("Are you sure you want to delete this asset?")) return;
+      setDeletingAssetId(asset.id);
+      try {
+        const res = await fetch(`/api/assets/${asset.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to delete asset");
+        }
+        await fetchProject();
+      } catch (e: any) {
+        setError(e.message || "Failed to delete asset");
+      } finally {
+        setDeletingAssetId(null);
+      }
+    },
+    [fetchProject]
+  );
+
+  const closePreview = () => setPreviewItem(null);
+
+  const renderPreview = () => {
+    if (!previewItem) return null;
+
+    const isAsset = previewItem.kind === "asset";
+    const file = previewItem.data;
+    const streamUrl = isAsset
+      ? `/api/assets/${file.id}/stream`
+      : `/api/deliveries/${file.id}/stream`;
+    const downloadUrl = isAsset
+      ? `/api/assets/${file.id}/download`
+      : `/api/deliveries/${file.id}/download`;
+    const filename = file.filename;
+    const contentType = "contentType" in file ? file.contentType : "";
+    const mimeType = contentType?.toLowerCase() || "";
+    const canShowImage = isImage(mimeType, filename);
+    const canShowVideo = isVideo(mimeType, filename);
+    const canShowAudio = mimeType.startsWith("audio/");
+
+    let body: JSX.Element = (
+      <div className="text-center text-[#5f6368]">
+        <div className="mb-4 flex justify-center">
+          <DriveFileIcon
+            type="OTHER"
+            contentType={mimeType}
+            filename={filename}
+            size={40}
+          />
+        </div>
+        <p>Preview is not available for this file type.</p>
+      </div>
+    );
+
+    if (canShowImage) {
+      body = (
+        <img
+          src={streamUrl}
+          alt={filename}
+          className="max-h-[70vh] max-w-full object-contain"
+        />
+      );
+    } else if (canShowVideo) {
+      body = (
+        <video
+          controls
+          src={streamUrl}
+          className="max-h-[70vh] w-full rounded-lg bg-black"
+        />
+      );
+    } else if (canShowAudio) {
+      body = (
+        <audio controls className="w-full">
+          <source src={streamUrl} type={mimeType || "audio/mpeg"} />
+          Your browser does not support the audio element.
+        </audio>
+      );
+    }
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6"
+        onClick={closePreview}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          className="w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-start justify-between border-b border-[#dadce0] bg-[#f8f9fa] px-6 py-4">
+            <div>
+              <h3 className="text-lg font-medium text-[#202124]">{filename}</h3>
+              <div className="text-sm text-[#5f6368]">
+                {formatFileSize(file.sizeBytes)}
+              </div>
+            </div>
+            <button
+              onClick={closePreview}
+              className="btn-icon text-[#5f6368] hover:text-[#202124]"
+              aria-label="Close preview"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M18 6L6 18M6 6l12 12"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+          <div className="flex max-h-[70vh] items-center justify-center overflow-auto bg-[#f8f9fa] p-6">
+            {body}
+          </div>
+          <div className="flex items-center justify-end gap-3 border-t border-[#dadce0] bg-white px-6 py-4">
+            <a href={downloadUrl} className="btn-secondary" target="_blank">
+              Download
+            </a>
+            <button onClick={closePreview} className="btn-primary">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
@@ -261,74 +583,11 @@ export default function ClientProjectPage({
     }
   };
 
-  const getFileIcon = (type: string, contentType?: string) => {
-    if (type === "IMAGE" || contentType?.startsWith("image/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#4285f4">
-          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" />
-        </svg>
-      );
-    } else if (type === "AUDIO" || contentType?.startsWith("audio/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#ea4335">
-          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-        </svg>
-      );
-    } else if (contentType?.startsWith("video/")) {
-      return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="#fbbc04">
-          <path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z" />
-        </svg>
-      );
-    }
-    return (
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="#34a853">
-        <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
-      </svg>
-    );
-  };
-
-  const isImageFile = (contentType: string, filename: string): boolean => {
-    const imageTypes = ["image/"];
-    const imageExtensions = [
-      ".jpg",
-      ".jpeg",
-      ".png",
-      ".gif",
-      ".webp",
-      ".svg",
-      ".bmp",
-      ".ico",
-    ];
-    return (
-      contentType.toLowerCase().startsWith("image/") ||
-      imageExtensions.some((ext) => filename.toLowerCase().endsWith(ext))
-    );
-  };
-
-  const isVideoFile = (contentType: string, filename: string): boolean => {
-    const videoTypes = ["video/"];
-    const videoExtensions = [
-      ".mp4",
-      ".avi",
-      ".mov",
-      ".wmv",
-      ".flv",
-      ".webm",
-      ".mkv",
-    ];
-    return (
-      videoTypes.some((type) => contentType.toLowerCase().includes(type)) ||
-      videoExtensions.some((ext) => filename.toLowerCase().endsWith(ext))
-    );
-  };
-
   return (
     <div className="drive-container">
-      {/* Toolbar */}
-      <div className="bg-white border-b border-[#dadce0] px-6 py-4">
-        <div className="flex items-center justify-between max-w-[1800px] mx-auto">
-          <div className="flex items-center gap-4">
+      <div className="bg-white border-b border-[#dadce0] px-4 py-3 sm:px-6 sm:py-4">
+        <div className="mx-auto flex w-full max-w-[1800px] flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <Link href="/client" className="btn-icon" title="Back">
               <svg
                 width="24"
@@ -341,22 +600,33 @@ export default function ClientProjectPage({
                 <path d="M19 12H5M12 19l-7-7 7-7" />
               </svg>
             </Link>
-            <div>
-              <h1 className="text-2xl font-normal text-[#202124]">
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold text-[#202124] sm:text-2xl">
                 {project.title ||
                   project.client?.email ||
-                  `Customer ${project.id.slice(0, 8)}`}
+                  `Project ${project.id.slice(0, 8)}`}
               </h1>
+              {project.client?.email && (
+                <p className="mt-0.5 truncate text-xs text-[#5f6368] sm:text-sm">
+                  {project.client.email}
+                </p>
+              )}
             </div>
           </div>
-          <div className={getStatusBadgeClass(project.status)}>
-            {project.status.replace("_", " ")}
+          <div className="flex items-center gap-2">
+            <div className={getStatusBadgeClass(project.status)}>
+              {project.status.replace("_", " ")}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="p-6 max-w-[1800px] mx-auto space-y-6">
+      <div className="mx-auto max-w-[1800px] space-y-6 px-4 py-6 sm:px-6 md:px-8">
+        {error && (
+          <div className="card bg-red-50 border-red-200 text-red-600">
+            {error}
+          </div>
+        )}
         {project.description && (
           <div className="card">
             <h2 className="font-medium text-[#202124] mb-2">Description</h2>
@@ -364,570 +634,60 @@ export default function ClientProjectPage({
           </div>
         )}
 
-        <section>
-          {/* Search and Filter Bar */}
-          {viewMode === "all" && (
-            <div className="mb-4 space-y-3">
-              <div className="flex gap-3 flex-wrap">
-                <div className="flex-1 min-w-[200px]">
-                  <div className="relative">
-                    <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#5f6368]">
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <path d="m21 21-4.35-4.35"></path>
-                      </svg>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Search folders and files..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 bg-white border border-[#dadce0] rounded-lg text-[#202124] placeholder-[#5f6368] focus:outline-none focus:border-[#1a73e8] focus:shadow-sm transition-all"
-                    />
-                  </div>
-                </div>
-                <select
-                  value={filterType}
-                  onChange={(e) =>
-                    setFilterType(
-                      e.target.value as "all" | "PROJECT" | "ASSETS"
-                    )
+        <section className="space-y-4">
+          <DriveBrowserView
+            browser={driveBrowser}
+            assets={driveAssets}
+            deliveries={driveDeliveries}
+            onPreviewAsset={handlePreviewAsset}
+            onPreviewDelivery={handlePreviewDelivery}
+            onDownloadAsset={handleDownloadAsset}
+            onDownloadDelivery={handleDownloadDelivery}
+            onDeleteAsset={(asset) => handleDeleteAsset(asset)}
+            deletingAssetId={deletingAssetId}
+            onUploadClick={handleUploadClick}
+            extraToolbarContent={
+              <input
+                ref={assetInputRef}
+                type="file"
+                multiple
+                accept="*/*"
+                className="sr-only"
+                onChange={(event) => {
+                  if (event.target.files) {
+                    handleAssetFiles(event.target.files);
                   }
-                  className="px-4 py-2 bg-white border border-[#dadce0] rounded-lg text-[#202124] focus:outline-none focus:border-[#1a73e8]"
-                >
-                  <option value="all">All Folders</option>
-                  <option value="PROJECT">Project Folders</option>
-                  <option value="ASSETS">Assets Folder</option>
-                  <option value="DELIVERABLES">Deliverables Folder</option>
-                </select>
+                }}
+              />
+            }
+            emptyState={
+              <div className="text-sm text-[#5f6368]">
+                No files yet. Upload assets to share them with your project
+                team.
               </div>
-            </div>
-          )}
+            }
+          />
 
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-normal text-[#202124]">
-                {viewMode === "all" ? (
-                  <>Projects & Assets</>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => {
-                        setViewMode("all");
-                        setSearchQuery("");
-                      }}
-                      className="text-[#1a73e8] hover:underline mr-2"
-                    >
-                      ← Back
-                    </button>
-                    {project.folders.find((f) => f.id === viewMode)?.name ||
-                      "Folder"}
-                  </>
-                )}
-              </h2>
-            </div>
-            <div className="flex gap-2"></div>
-          </div>
-
-          {/* Folders Grid (only show when viewing all) */}
-          {viewMode === "all" &&
-            (() => {
-              // Filter folders by search and type
-              const filteredFolders = project.folders.filter((folder) => {
-                const matchesSearch =
-                  !searchQuery ||
-                  folder.name.toLowerCase().includes(searchQuery.toLowerCase());
-                const matchesFilter =
-                  filterType === "all" || folder.type === filterType;
-                return matchesSearch && matchesFilter;
-              });
-
-              const assetsFolder = filteredFolders.find(
-                (f) => f.type === "ASSETS"
-              );
-              const deliverablesFolder = filteredFolders.find(
-                (f) => f.type === "DELIVERABLES"
-              );
-              const projectFolders = filteredFolders.filter(
-                (f) => f.type === "PROJECT"
-              );
-
-              return (
-                <div className="mb-8 space-y-6">
-                  {/* ASSETS Folder */}
-                  {assetsFolder && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          className="text-[#5f6368]"
-                        >
-                          <path
-                            d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                        <h3 className="text-lg font-medium text-[#202124]">
-                          Shared Assets
-                        </h3>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                        <div
-                          key={assetsFolder.id}
-                          className="card group cursor-pointer"
-                          onClick={() => setViewMode(assetsFolder.id)}
-                        >
-                          <div className="flex flex-col items-center text-center">
-                            <div className="mb-2">
-                              <svg
-                                width="48"
-                                height="48"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                  fill="#4285f4"
-                                />
-                              </svg>
-                            </div>
-                            <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                              {assetsFolder.name}
-                            </h3>
-                            <div className="text-xs text-[#5f6368]">
-                              {assetsFolder._count.assets} file
-                              {assetsFolder._count.assets !== 1 ? "s" : ""}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* DELIVERABLES Folder */}
-                  {deliverablesFolder && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          className="text-[#5f6368]"
-                        >
-                          <path
-                            d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                        <h3 className="text-lg font-medium text-[#202124]">
-                          Deliverables
-                        </h3>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                        <div
-                          key={deliverablesFolder.id}
-                          className="card group cursor-pointer"
-                          onClick={() => setViewMode(deliverablesFolder.id)}
-                        >
-                          <div className="flex flex-col items-center text-center">
-                            <div className="mb-2">
-                              <svg
-                                width="48"
-                                height="48"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                  fill="#10b981"
-                                />
-                              </svg>
-                            </div>
-                            <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                              {deliverablesFolder.name}
-                            </h3>
-                            <div className="text-xs text-[#5f6368]">
-                              {deliverablesFolder._count.deliveries} file
-                              {deliverablesFolder._count.deliveries !== 1
-                                ? "s"
-                                : ""}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* PROJECT Folders */}
-                  {projectFolders.length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          className="text-[#5f6368]"
-                        >
-                          <path
-                            d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                        <h3 className="text-lg font-medium text-[#202124]">
-                          Project Folders ({projectFolders.length})
-                        </h3>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                        {projectFolders.map((folder) => (
-                          <div key={folder.id} className="card group">
-                            <div
-                              className="flex flex-col items-center text-center cursor-pointer"
-                              onClick={() => setViewMode(folder.id)}
-                            >
-                              <div className="mb-2">
-                                <svg
-                                  width="48"
-                                  height="48"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <path
-                                    d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
-                                    fill="#fbbc04"
-                                  />
-                                </svg>
-                              </div>
-                              <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                {folder.name}
-                              </h3>
-                              <div className="text-xs text-[#5f6368] space-y-0.5">
-                                {folder._count.assets > 0 && (
-                                  <div>
-                                    {folder._count.assets} asset
-                                    {folder._count.assets !== 1 ? "s" : ""}
-                                  </div>
-                                )}
-                                {folder._count.deliveries > 0 && (
-                                  <div>
-                                    {folder._count.deliveries} deliver
-                                    {folder._count.deliveries !== 1
-                                      ? "ies"
-                                      : "y"}
-                                  </div>
-                                )}
-                                {folder._count.assets === 0 &&
-                                  folder._count.deliveries === 0 && (
-                                    <div>Empty</div>
-                                  )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-          {/* Search Bar in Folder View */}
-          {viewMode !== "all" && (
-            <div className="mb-4">
-              <div className="relative">
-                <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#5f6368]">
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <path d="m21 21-4.35-4.35"></path>
-                  </svg>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Search files..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-white border border-[#dadce0] rounded-lg text-[#202124] placeholder-[#5f6368] focus:outline-none focus:border-[#1a73e8] focus:shadow-sm transition-all"
+          {uploadingAssets && (
+            <div className="rounded-lg border border-[#dadce0] bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-center justify-between text-sm text-[#202124]">
+                <span>
+                  Uploading {currentAssetUploadName || "files"} (
+                  {currentAssetUploadIndex}/{Math.max(assetUploadTotal, 1)})
+                </span>
+                <span>{assetUploadProgress}%</span>
+              </div>
+              <div className="mt-2 h-2 rounded-full bg-[#e8eaed]">
+                <div
+                  className="h-2 rounded-full bg-[#1a73e8] transition-all"
+                  style={{ width: `${assetUploadProgress}%` }}
                 />
               </div>
             </div>
           )}
-
-          {/* Folder View - Show Assets and Deliveries */}
-          {viewMode !== "all" &&
-            (() => {
-              const currentFolder = project.folders.find(
-                (f) => f.id === viewMode
-              );
-              if (!currentFolder) return null;
-
-              const folderAssets = project.assets.filter(
-                (a) => a.folderId === viewMode
-              );
-              const folderDeliveries = project.deliveries.filter(
-                (d) => d.folderId === viewMode
-              );
-
-              // Filter by search
-              const filteredAssets = folderAssets.filter(
-                (a) =>
-                  !searchQuery ||
-                  a.filename.toLowerCase().includes(searchQuery.toLowerCase())
-              );
-              const filteredDeliveries = folderDeliveries.filter(
-                (d) =>
-                  !searchQuery ||
-                  d.filename.toLowerCase().includes(searchQuery.toLowerCase())
-              );
-
-              return (
-                <>
-                  {/* Upload Form - Inside Folder View */}
-                  {currentFolder.type === "ASSETS" && (
-                    <div className="card mb-4">
-                      <h3 className="font-medium text-[#202124] mb-4">
-                        Upload New Asset
-                      </h3>
-                      <div className="space-y-4">
-                        <div className="text-sm text-[#5f6368]">
-                          Uploading to: <strong>{currentFolder.name}</strong>
-                        </div>
-                        <div>
-                          <input
-                            type="file"
-                            onChange={(e) =>
-                              setFile(e.target.files?.[0] || null)
-                            }
-                            className="input"
-                            accept="*/*"
-                            multiple={false}
-                          />
-                          <p className="text-xs text-[#5f6368] mt-1">
-                            All file types are supported. File type will be
-                            detected automatically.
-                          </p>
-                        </div>
-                        {error && (
-                          <p className="text-red-600 text-sm">{error}</p>
-                        )}
-                        <button
-                          onClick={onUpload}
-                          disabled={!file || uploading}
-                          className="btn-primary disabled:opacity-50"
-                        >
-                          {uploading ? "Uploading..." : "Upload Asset"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Deliveries Section (for PROJECT and DELIVERABLES folders) */}
-                  {(currentFolder.type === "PROJECT" ||
-                    currentFolder.type === "DELIVERABLES") && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <svg
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          className="text-[#5f6368]"
-                        >
-                          <path
-                            d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"
-                            fill="currentColor"
-                          />
-                        </svg>
-                        <h3 className="text-lg font-medium text-[#202124]">
-                          Deliveries ({filteredDeliveries.length})
-                        </h3>
-                      </div>
-                      {filteredDeliveries.length === 0 ? (
-                        <div className="text-center py-8 text-[#5f6368] text-sm">
-                          No deliveries in this project folder yet.
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                          {filteredDeliveries.map((delivery) => {
-                            const imageFile = isImageFile(
-                              delivery.contentType,
-                              delivery.filename
-                            );
-                            const videoFile = isVideoFile(
-                              delivery.contentType,
-                              delivery.filename
-                            );
-                            const icon = getFileIcon(
-                              imageFile ? "IMAGE" : "OTHER",
-                              delivery.contentType
-                            );
-
-                            return (
-                              <div key={delivery.id} className="card group">
-                                <div className="flex flex-col items-center text-center mb-3">
-                                  <div className="mb-2">{icon}</div>
-                                  <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                    {delivery.filename}
-                                  </h3>
-                                  <div className="text-xs text-[#5f6368] mb-1">
-                                    {(
-                                      delivery.sizeBytes /
-                                      (1024 * 1024)
-                                    ).toFixed(1)}{" "}
-                                    MB
-                                  </div>
-                                </div>
-                                <div className="flex gap-2 justify-center flex-wrap">
-                                  {videoFile && (
-                                    <Link
-                                      href={`/api/deliveries/${delivery.id}/stream`}
-                                      className="px-3 py-1.5 btn-primary text-xs no-underline"
-                                    >
-                                      Watch
-                                    </Link>
-                                  )}
-                                  {imageFile && (
-                                    <Link
-                                      href={`/api/deliveries/${delivery.id}/stream`}
-                                      target="_blank"
-                                      className="px-3 py-1.5 btn-primary text-xs no-underline"
-                                    >
-                                      View
-                                    </Link>
-                                  )}
-                                  <Link
-                                    href={`/api/deliveries/${delivery.id}/download`}
-                                    className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                                  >
-                                    Download
-                                  </Link>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Assets Section */}
-                  <div>
-                    <div className="flex items-center gap-2 mb-4">
-                      <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        className="text-[#5f6368]"
-                      >
-                        <path
-                          d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"
-                          fill="currentColor"
-                        />
-                      </svg>
-                      <h3 className="text-lg font-medium text-[#202124]">
-                        Assets ({filteredAssets.length})
-                      </h3>
-                    </div>
-                    {filteredAssets.length === 0 ? (
-                      <div className="text-center py-8 text-[#5f6368] text-sm">
-                        No assets in this folder yet.
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
-                        {filteredAssets.map((asset) => {
-                          const canDelete =
-                            currentUser?.role === "ADMIN" ||
-                            asset.uploadedBy?.id === currentUser?.id;
-                          const canView =
-                            asset.type === "IMAGE" ||
-                            asset.type === "AUDIO" ||
-                            asset.contentType?.startsWith("image/") ||
-                            asset.contentType?.startsWith("audio/") ||
-                            asset.contentType?.startsWith("video/");
-
-                          return (
-                            <div key={asset.id} className="card group">
-                              <div className="flex flex-col items-center text-center mb-3">
-                                <div className="mb-2">
-                                  {getFileIcon(asset.type, asset.contentType)}
-                                </div>
-                                <h3 className="font-medium text-[#202124] text-sm mb-1 truncate w-full">
-                                  {asset.filename}
-                                </h3>
-                                <div className="text-xs text-[#5f6368] mb-1">
-                                  {asset.type} •{" "}
-                                  {(asset.sizeBytes / (1024 * 1024)).toFixed(1)}{" "}
-                                  MB
-                                </div>
-                                {asset.uploadedBy && (
-                                  <div
-                                    className="text-xs text-[#80868b] truncate w-full"
-                                    title={asset.uploadedBy.email}
-                                  >
-                                    {asset.uploadedBy.email}
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex gap-2 justify-center flex-wrap">
-                                {canView && (
-                                  <Link
-                                    href={`/api/assets/${asset.id}/stream`}
-                                    target="_blank"
-                                    className="px-3 py-1.5 btn-primary text-xs no-underline"
-                                  >
-                                    View
-                                  </Link>
-                                )}
-                                <Link
-                                  href={`/api/assets/${asset.id}/download`}
-                                  className="px-3 py-1.5 btn-secondary text-xs no-underline"
-                                >
-                                  Download
-                                </Link>
-                                {canDelete && (
-                                  <button
-                                    onClick={() => deleteAsset(asset.id)}
-                                    disabled={deletingAssetId === asset.id}
-                                    className="px-3 py-1.5 bg-red-600 text-white rounded text-xs disabled:opacity-50 border-none cursor-pointer hover:bg-red-700"
-                                  >
-                                    {deletingAssetId === asset.id
-                                      ? "Deleting..."
-                                      : "Delete"}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </>
-              );
-            })()}
         </section>
       </div>
+      {renderPreview()}
     </div>
   );
 }

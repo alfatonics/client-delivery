@@ -19,11 +19,14 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { filename, contentType, sizeBytes } = body as {
     filename: string;
-    contentType: string;
+    contentType?: string | null;
     sizeBytes: number;
   };
-  if (!filename || !contentType || !sizeBytes)
+  if (!filename || !sizeBytes)
     return new NextResponse("Bad Request", { status: 400 });
+
+  const effectiveContentType =
+    contentType?.trim() || "application/octet-stream";
 
   const client = getR2Client();
   const key = `videos/${Date.now()}-${encodeURIComponent(filename)}`;
@@ -32,7 +35,7 @@ export async function POST(req: Request) {
     new CreateMultipartUploadCommand({
       Bucket: R2_BUCKET,
       Key: key,
-      ContentType: contentType,
+      ContentType: effectiveContentType,
     })
   );
   const uploadId = create.UploadId!;

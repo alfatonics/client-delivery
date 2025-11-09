@@ -8,7 +8,7 @@ export default async function Navbar() {
 
   return (
     <nav className="bg-white border-b border-[#dadce0] h-16 flex items-center px-3 sm:px-4 shadow-sm">
-      <div className="flex items-center gap-2 sm:gap-4 md:gap-8 flex-1 max-w-[1800px] mx-auto w-full">
+      <div className="flex items-center gap-2 sm:gap-4 md:gap-8 flex-1 max-w-[1920px] mx-auto w-full">
         {/* Logo */}
         <Link
           href="/"
