@@ -72,6 +72,10 @@ export async function PATCH(
             id: parsed.parentId,
             projectId: id,
           },
+          select: {
+            id: true,
+            parentId: true,
+          },
         });
 
         if (!parentFolder) {
