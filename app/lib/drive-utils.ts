@@ -9,11 +9,12 @@ export type DriveFolderFlat = {
   id: string;
   name: string;
   type: FolderType;
-  projectId: string;
   parentId: string | null;
-  createdAt: string;
+  projectId?: string;
+  createdAt?: string;
   updatedAt?: string;
-  _count: DriveFolderCounts;
+  _count?: DriveFolderCounts;
+  aggregateCount?: DriveFolderCounts;
 };
 
 export type DriveFolderNode = DriveFolderFlat & {
@@ -27,7 +28,13 @@ export const buildFolderTree = (
   const roots: DriveFolderNode[] = [];
 
   folders.forEach((folder) => {
-    nodeMap.set(folder.id, { ...folder, children: [] });
+    const count =
+      folder._count ??
+      folder.aggregateCount ?? {
+        assets: 0,
+        deliveries: 0,
+      };
+    nodeMap.set(folder.id, { ...folder, _count: count, children: [] });
   });
 
   nodeMap.forEach((node) => {
