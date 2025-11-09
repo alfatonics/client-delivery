@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useState, use, useRef, useMemo, useCallback } from "react";
+import {
+  useEffect,
+  useState,
+  use,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import DriveFileIcon from "@/app/components/drive/DriveFileIcon";
 import DriveBrowserView from "@/app/components/drive/browser/DriveBrowserView";
@@ -466,7 +474,7 @@ export default function ClientProjectPage({
     const canShowVideo = isVideo(mimeType, filename);
     const canShowAudio = mimeType.startsWith("audio/");
 
-    let body: JSX.Element = (
+    let body: ReactNode = (
       <div className="text-center text-[#5f6368]">
         <div className="mb-4 flex justify-center">
           <DriveFileIcon
