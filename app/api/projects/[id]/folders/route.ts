@@ -131,7 +131,13 @@ export async function POST(
         name: parsed.name,
         type: targetType,
         projectId: id,
-        parentId,
+        ...(parentId
+          ? {
+              parent: {
+                connect: { id: parentId },
+              },
+            }
+          : {}),
       },
       include: {
         _count: {
