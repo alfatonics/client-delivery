@@ -121,7 +121,7 @@ const FolderTree: FC<FolderTreeProps> = ({
               </svg>
               <span className="flex-1 truncate text-left">{node.name}</span>
               <span className="text-xs text-[#5f6368]">
-                {node._count.assets + node._count.deliveries}
+                {(node._count?.assets ?? 0) + (node._count?.deliveries ?? 0)}
               </span>
             </button>
 
@@ -206,7 +206,7 @@ const FolderTreeBranch: FC<{
         </svg>
         <span className="flex-1 truncate text-left">{node.name}</span>
         <span className="text-xs text-[#5f6368]">
-          {node._count.assets + node._count.deliveries}
+          {(node._count?.assets ?? 0) + (node._count?.deliveries ?? 0)}
         </span>
       </button>
       {hasChildren && isExpanded && (
