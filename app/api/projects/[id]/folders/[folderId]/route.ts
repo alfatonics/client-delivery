@@ -1,7 +1,12 @@
+import type { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
+type AncestorWithParent = Prisma.FolderGetPayload<{
+  include: { parent: { select: { id: true } } };
+}>;
 
 const updateFolderSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -99,7 +104,8 @@ export async function PATCH(
               { status: 400 }
             );
           }
-          const ancestor = await prisma.folder.findUnique({
+          const ancestor: AncestorWithParent | null =
+            await prisma.folder.findUnique({
             where: { id: currentParentId },
             include: {
               parent: {
