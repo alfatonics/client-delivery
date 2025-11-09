@@ -8,7 +8,7 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
     where: { id: folderId },
   });
 
-  return result?.parentId ?? null;
+  return (result as { parentId: string | null } | null)?.parentId ?? null;
 }
 
 const updateFolderSchema = z.object({
