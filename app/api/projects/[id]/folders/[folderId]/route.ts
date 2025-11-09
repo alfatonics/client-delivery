@@ -99,7 +99,8 @@ export async function PATCH(
               { status: 400 }
             );
           }
-          const ancestor = await prisma.folder.findUnique({
+          const ancestor: { parent: { id: string } | null } | null =
+            await prisma.folder.findUnique({
             where: { id: currentParentId },
             select: { parent: { select: { id: true } } },
           });
