@@ -1,3 +1,4 @@
+import type { Folder } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
@@ -99,7 +100,7 @@ export async function PATCH(
               { status: 400 }
             );
           }
-          const ancestor = await prisma.folder.findUnique({
+          const ancestor: Folder | null = await prisma.folder.findUnique({
             where: { id: currentParentId },
           });
           if (!ancestor) break;
