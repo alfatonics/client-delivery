@@ -118,19 +118,14 @@ export async function PATCH(
       }
     }
 
-    const data: Prisma.FolderUncheckedUpdateInput = {};
-
-    if (parsed.name) {
-      data.name = parsed.name;
-    }
-
-    if (nextParentId !== undefined) {
-      data.parentId = nextParentId ?? null;
-    }
-
     const updated = await prisma.folder.update({
       where: { id: folderId },
-      data,
+      data: {
+        ...(parsed.name ? { name: parsed.name } : {}),
+        ...(nextParentId !== undefined
+          ? { parentId: nextParentId ?? null }
+          : {}),
+      } satisfies Prisma.FolderUncheckedUpdateInput,
       include: {
         _count: {
           select: { assets: true, deliveries: true },
