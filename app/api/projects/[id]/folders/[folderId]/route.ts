@@ -1,4 +1,3 @@
-import type { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
@@ -14,6 +13,10 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
 
   return parentId;
 }
+
+type ParentRelationUpdate =
+  | { connect: { id: string } }
+  | { disconnect: true };
 
 const updateFolderSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -73,9 +76,7 @@ export async function PATCH(
       );
     }
 
-    let parentRelation:
-      | Prisma.FolderUpdateInput["parent"]
-      | undefined = undefined;
+    let parentRelation: ParentRelationUpdate | undefined = undefined;
 
     if (parsed.parentId !== undefined) {
       if (parsed.parentId === null) {
@@ -120,9 +121,14 @@ export async function PATCH(
       }
     }
 
-    const data: Prisma.FolderUpdateInput = {
-      ...(parsed.name && { name: parsed.name }),
-    };
+    const data: {
+      name?: string;
+      parent?: ParentRelationUpdate;
+    } = {};
+
+    if (parsed.name) {
+      data.name = parsed.name;
+    }
 
     if (parentRelation !== undefined) {
       data.parent = parentRelation;
