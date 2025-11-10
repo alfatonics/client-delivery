@@ -1,16 +1,14 @@
-import type { Folder } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 async function getParentFolderId(folderId: string): Promise<string | null> {
-  const record = (await prisma.folder.findUnique({
+  const record = await prisma.folder.findUnique({
     where: { id: folderId },
-    select: { parentId: true },
-  } as any)) as Pick<Folder, "parentId"> | null;
+  });
 
-  return record?.parentId ?? null;
+  return (record as any)?.parentId ?? null;
 }
 
 const updateFolderSchema = z.object({
