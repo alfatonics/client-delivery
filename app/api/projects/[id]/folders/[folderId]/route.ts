@@ -122,10 +122,8 @@ export async function PATCH(
       where: { id: folderId },
       data: {
         ...(parsed.name ? { name: parsed.name } : {}),
-        ...(nextParentId !== undefined
-          ? { parentId: { set: nextParentId ?? null } }
-          : {}),
-      } satisfies Prisma.FolderUncheckedUpdateInput,
+        ...(nextParentId !== undefined ? { parentId: nextParentId } : {}),
+      } satisfies Prisma.FolderUpdateInput,
       include: {
         _count: {
           select: { assets: true, deliveries: true },
