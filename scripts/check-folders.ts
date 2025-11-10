@@ -37,24 +37,24 @@ async function main() {
     return;
   }
 
-const folders = await prisma.folder
-  .findMany({
-    where: { projectId },
+const baseFolders = await prisma.folder.findMany({
+  where: { projectId },
+});
+
+type FolderWithParentId = typeof baseFolders[number] & { parentId: string | null };
+
+const folders = await Promise.all(
+  (baseFolders as FolderWithParentId[]).map(async (folder) => {
+    const parentId = folder.parentId;
+    const parent = parentId
+      ? await prisma.folder.findUnique({
+          where: { id: parentId },
+          select: { id: true },
+        })
+      : null;
+    return { ...folder, parentId, parent };
   })
-  .then((list) =>
-    Promise.all(
-      list.map(async (folder) => {
-        const parent =
-          folder.parentId === null
-            ? null
-            : await prisma.folder.findUnique({
-                where: { id: folder.parentId },
-                select: { id: true },
-              });
-        return { ...folder, parent };
-      })
-    )
-  );
+);
 folders.sort((a, b) => {
   const aParent = a.parent?.id ?? null;
   const bParent = b.parent?.id ?? null;
@@ -73,7 +73,7 @@ folders.sort((a, b) => {
 
   console.log(`Folders for project ${projectId}:`);
   folders.forEach((folder) => {
-    const parentId = folder.parent?.id ?? null;
+  const parentId = folder.parentId ?? folder.parent?.id ?? null;
     console.log(
       `- ${folder.name} (${folder.id}) type=${folder.type} parent=${parentId}`
     );
