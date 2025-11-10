@@ -7,9 +7,7 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
   const result = await prisma.folder.findUnique({
     where: { id: folderId },
     include: {
-      parent: {
-        select: { id: true },
-      },
+      parent: true,
     },
   });
 
