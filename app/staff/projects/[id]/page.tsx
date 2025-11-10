@@ -310,7 +310,7 @@ export default function StaffProjectPage({
     async (folder: DriveFolder) => {
       if (
         !confirm(
-          `Are you sure you want to delete “${folder.name}”? Contents will move to the parent folder.`
+          `Are you sure you want to delete “${folder.name}”? All nested folders and files will be permanently removed.`
         )
       ) {
         return;
