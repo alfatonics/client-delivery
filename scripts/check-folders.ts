@@ -37,17 +37,10 @@ async function main() {
     return;
   }
 
-  const folders = await prisma.folder.findMany({
-    where: { projectId },
-    select: {
-      id: true,
-      name: true,
-      type: true,
-      parentId: true,
-      createdAt: true,
-    },
-    orderBy: [{ parentId: "asc" }, { createdAt: "asc" }],
-  });
+const folders = await prisma.folder.findMany({
+  where: { projectId },
+  orderBy: [{ parentId: "asc" }, { createdAt: "asc" }],
+});
 
   if (folders.length === 0) {
     console.log(`No folders found for project ${projectId}`);
