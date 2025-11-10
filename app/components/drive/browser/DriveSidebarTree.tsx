@@ -10,6 +10,8 @@ type DriveSidebarTreeProps = {
   onCreateFolder?: (parentId: string) => void;
   onDrop?: (targetFolderId: string, item: DriveDraggableItem) => void;
   draggingItem?: DriveDraggableItem | null;
+  onDragStart?: (item: DriveDraggableItem) => void;
+  onDragEnd?: () => void;
 };
 
 type TreeItemProps = {
@@ -20,6 +22,8 @@ type TreeItemProps = {
   onCreateFolder?: (parentId: string) => void;
   onDrop?: (targetFolderId: string, item: DriveDraggableItem) => void;
   draggingItem?: DriveDraggableItem | null;
+  onDragStart?: (item: DriveDraggableItem) => void;
+  onDragEnd?: () => void;
 };
 
 const TreeItem: FC<TreeItemProps> = ({
@@ -30,6 +34,8 @@ const TreeItem: FC<TreeItemProps> = ({
   onCreateFolder,
   onDrop,
   draggingItem,
+  onDragStart,
+  onDragEnd,
 }) => {
   const [expanded, setExpanded] = useState(depth === 0);
   const isActive = activeFolderId === node.id;
@@ -61,6 +67,15 @@ const TreeItem: FC<TreeItemProps> = ({
           event.preventDefault();
         }}
         onDrop={handleDrop}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "move";
+          onDragStart?.({
+            kind: "FOLDER",
+            id: node.id,
+            parentId: node.parentId ?? null,
+          });
+        }}
+        onDragEnd={onDragEnd}
       >
         <button
           type="button"
@@ -110,6 +125,8 @@ const TreeItem: FC<TreeItemProps> = ({
             onCreateFolder={onCreateFolder}
             onDrop={onDrop}
             draggingItem={draggingItem}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
           />
         ))}
     </div>
@@ -123,6 +140,8 @@ export const DriveSidebarTree: FC<DriveSidebarTreeProps> = ({
   onCreateFolder,
   onDrop,
   draggingItem,
+  onDragStart,
+  onDragEnd,
 }) => {
   const sortedTree = useMemo(() => {
     const sortNodes = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
@@ -148,6 +167,8 @@ export const DriveSidebarTree: FC<DriveSidebarTreeProps> = ({
           onCreateFolder={onCreateFolder}
           onDrop={onDrop}
           draggingItem={draggingItem}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
         />
       ))}
     </div>

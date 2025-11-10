@@ -80,6 +80,8 @@ export const DriveBrowserView: FC<DriveBrowserViewProps> = ({
           }
           onDrop={handleDrop}
           draggingItem={browser.draggingItem}
+          onDragStart={browser.beginDrag}
+          onDragEnd={browser.endDrag}
         />
       </aside>
       <main className="flex-1 space-y-6">

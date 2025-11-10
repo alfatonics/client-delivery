@@ -12,7 +12,13 @@ import type {
   DriveFolder,
 } from "@/app/components/drive/browser/types";
 import DriveFileIcon from "@/app/components/drive/DriveFileIcon";
-import { formatFileSize, isImage, isVideo } from "@/app/lib/drive-utils";
+import {
+  dropContainsDirectory,
+  extractDroppedFiles,
+  formatFileSize,
+  isImage,
+  isVideo,
+} from "@/app/lib/drive-utils";
 
 type Asset = {
   id: string;
@@ -463,7 +469,10 @@ export default function ProjectDetailPage({
   }, [driveBrowser.activeFolderId, folders]);
 
   const uploadAssets = useCallback(
-    async (incoming: FileList | File[]) => {
+    async (
+      incoming: FileList | File[],
+      options?: { targetFolderId?: string | null; refreshAfter?: boolean }
+    ) => {
       const files =
         incoming instanceof FileList ? Array.from(incoming) : [...incoming];
       if (files.length === 0) return;
@@ -471,7 +480,9 @@ export default function ProjectDetailPage({
       let taskId: string | null = null;
 
       try {
-        const targetFolderId = resolveAssetFolderId();
+        const targetFolderId =
+          options?.targetFolderId ?? resolveAssetFolderId();
+        const shouldRefresh = options?.refreshAfter ?? true;
         setError(null);
         taskId = `asset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -626,7 +637,9 @@ export default function ProjectDetailPage({
           });
         }
 
-        await fetchData();
+        if (shouldRefresh) {
+          await fetchData();
+        }
         updateTask({
           progress: 100,
           status: "completed",
@@ -660,7 +673,10 @@ export default function ProjectDetailPage({
   );
 
   const uploadDeliveries = useCallback(
-    async (incoming: FileList | File[]) => {
+    async (
+      incoming: FileList | File[],
+      options?: { targetFolderId?: string | null; refreshAfter?: boolean }
+    ) => {
       const files =
         incoming instanceof FileList ? Array.from(incoming) : [...incoming];
       if (files.length === 0) return;
@@ -668,7 +684,9 @@ export default function ProjectDetailPage({
       let taskId: string | null = null;
 
       try {
-        const targetFolderId = resolveDeliveryFolderId();
+        const targetFolderId =
+          options?.targetFolderId ?? resolveDeliveryFolderId();
+        const shouldRefresh = options?.refreshAfter ?? true;
         setError(null);
         taskId = `delivery-${Date.now()}-${Math.random()
           .toString(16)
@@ -824,7 +842,9 @@ export default function ProjectDetailPage({
           });
         }
 
-        await fetchData();
+        if (shouldRefresh) {
+          await fetchData();
+        }
         updateTask({
           progress: 100,
           status: "completed",
@@ -955,28 +975,141 @@ export default function ProjectDetailPage({
   );
 
   const handleUploadDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    async (event: DragEvent<HTMLDivElement>) => {
       if (!Array.from(event.dataTransfer.types).includes("Files")) {
         return;
       }
       event.preventDefault();
-      const files = event.dataTransfer.files;
-      if (!files || files.length === 0) return;
+      const droppedEntries = await extractDroppedFiles(event.dataTransfer);
+      if (droppedEntries.length === 0) return;
+
+      const filesOnly = droppedEntries.map((entry) => entry.file);
+      if (!dropContainsDirectory(droppedEntries)) {
+        const activeId = driveBrowser.activeFolderId;
+        const targetFolder = activeId
+          ? folders.find((f) => f.id === activeId)
+          : null;
+        if (targetFolder && targetFolder.type === "ASSETS") {
+          handleAssetFiles(filesOnly);
+        } else {
+          handleDeliveryFiles(filesOnly);
+        }
+        return;
+      }
+
       const activeId = driveBrowser.activeFolderId;
-      const targetFolder = activeId
+      const activeFolder = activeId
         ? folders.find((f) => f.id === activeId)
         : null;
-      if (targetFolder && targetFolder.type === "ASSETS") {
-        handleAssetFiles(files);
-      } else {
-        handleDeliveryFiles(files);
+
+      const cacheKey = (parentId: string | null, name: string) =>
+        `${parentId ?? "__root__"}::${name.trim().toLowerCase()}`;
+      const folderIdCache = new Map<string, string>();
+      folders.forEach((folder) => {
+        folderIdCache.set(
+          cacheKey(folder.parentId ?? null, folder.name),
+          folder.id
+        );
+      });
+
+      const groupedByFolder = new Map<string, File[]>();
+      droppedEntries.forEach((entry) => {
+        const normalizedPath = entry.relativePath.replace(/\\/g, "/");
+        const segments = normalizedPath.split("/").filter(Boolean);
+        const filename = segments.pop();
+        if (!filename) return;
+        const folderPath = segments.join("/");
+        if (!groupedByFolder.has(folderPath)) {
+          groupedByFolder.set(folderPath, []);
+        }
+        groupedByFolder.get(folderPath)!.push(entry.file);
+      });
+
+      const createFolder = async (
+        name: string,
+        parentId: string | null
+      ): Promise<Folder> => {
+        const res = await fetch(`/api/projects/${id}/folders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, parentId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || `Failed to create folder "${name}"`);
+        }
+        const created = data as Folder;
+        folderIdCache.set(cacheKey(parentId, created.name), created.id);
+        return created;
+      };
+
+      const ensureFolderPath = async (
+        segments: string[],
+        baseFolderId: string | null
+      ): Promise<string | null> => {
+        let currentParentId = baseFolderId;
+        for (const segment of segments) {
+          const trimmed = segment.trim();
+          if (!trimmed) continue;
+          const key = cacheKey(currentParentId, trimmed);
+          if (!folderIdCache.has(key)) {
+            const created = await createFolder(trimmed, currentParentId);
+            currentParentId = created.id;
+            continue;
+          }
+          currentParentId = folderIdCache.get(key)!;
+        }
+        return currentParentId;
+      };
+
+      try {
+        setError(null);
+        const processAsAssets = activeFolder?.type === "ASSETS";
+        const baseFolderId = processAsAssets
+          ? activeFolder?.id ?? resolveAssetFolderId()
+          : activeFolder?.id ?? resolveDeliveryFolderId();
+
+        for (const [folderPath, groupedFiles] of groupedByFolder.entries()) {
+          const segments = folderPath.length > 0 ? folderPath.split("/") : [];
+          const destinationFolderId = await ensureFolderPath(
+            segments,
+            baseFolderId
+          );
+          if (!destinationFolderId) {
+            throw new Error("Unable to resolve destination folder.");
+          }
+
+          if (processAsAssets) {
+            await uploadAssets(groupedFiles, {
+              targetFolderId: destinationFolderId,
+              refreshAfter: false,
+            });
+          } else {
+            await uploadDeliveries(groupedFiles, {
+              targetFolderId: destinationFolderId,
+              refreshAfter: false,
+            });
+          }
+        }
+
+        await fetchData();
+      } catch (error: any) {
+        console.error("Folder drop failed:", error);
+        setError(error?.message || "Failed to process dropped folder.");
       }
     },
     [
       driveBrowser.activeFolderId,
       folders,
+      fetchData,
       handleAssetFiles,
       handleDeliveryFiles,
+      id,
+      resolveAssetFolderId,
+      resolveDeliveryFolderId,
+      uploadAssets,
+      uploadDeliveries,
+      setError,
     ]
   );
 

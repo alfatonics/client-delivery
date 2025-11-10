@@ -28,8 +28,7 @@ export const buildFolderTree = (
   const roots: DriveFolderNode[] = [];
 
   folders.forEach((folder) => {
-    const count =
-      folder._count ??
+    const count = folder._count ??
       folder.aggregateCount ?? {
         assets: 0,
         deliveries: 0,
@@ -135,3 +134,109 @@ export const isVideo = (contentType: string, filename: string): boolean => {
   );
 };
 
+export type DroppedFileEntry = {
+  file: File;
+  relativePath: string;
+};
+
+const readAllDirectoryEntries = (directoryReader: any): Promise<any[]> => {
+  return new Promise((resolve, reject) => {
+    const entries: any[] = [];
+    const readBatch = () => {
+      directoryReader.readEntries(
+        (batch: any[]) => {
+          if (!batch.length) {
+            resolve(entries);
+            return;
+          }
+          entries.push(...batch);
+          readBatch();
+        },
+        (error: unknown) => {
+          reject(error);
+        }
+      );
+    };
+    readBatch();
+  });
+};
+
+const traverseFileSystemEntry = async (
+  entry: any
+): Promise<DroppedFileEntry[]> => {
+  if (!entry) return [];
+
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => {
+      entry.file(
+        (file: File) => {
+          const relativePath =
+            (entry.fullPath as string | undefined)?.replace(/^\//, "") ||
+            (file as any).webkitRelativePath ||
+            file.name;
+          resolve([{ file, relativePath }]);
+        },
+        (error: unknown) => reject(error)
+      );
+    });
+  }
+
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const entries = await readAllDirectoryEntries(reader).catch(() => []);
+    const results = await Promise.all(
+      entries.map((child: any) => traverseFileSystemEntry(child))
+    );
+    return results.flat();
+  }
+
+  return [];
+};
+
+export const extractDroppedFiles = async (
+  dataTransfer: DataTransfer
+): Promise<DroppedFileEntry[]> => {
+  const items = Array.from(dataTransfer.items ?? []);
+
+  const entryPromises = items
+    .map((item) => {
+      if (item.kind !== "file") return null;
+      const getter = (item as any).webkitGetAsEntry;
+      if (typeof getter !== "function") return null;
+      try {
+        return traverseFileSystemEntry(getter.call(item));
+      } catch (error) {
+        console.error("Failed to traverse drag entry:", error);
+        return null;
+      }
+    })
+    .filter(
+      (promise): promise is Promise<DroppedFileEntry[]> => promise !== null
+    );
+
+  if (entryPromises.length > 0) {
+    try {
+      const resolved = await Promise.all(entryPromises);
+      const flattened = resolved.flat();
+      if (flattened.length > 0) {
+        return flattened;
+      }
+    } catch (error) {
+      console.warn("Falling back to DataTransfer#files traversal:", error);
+    }
+  }
+
+  const files = Array.from(dataTransfer.files ?? []);
+  return files.map((file) => ({
+    file,
+    relativePath:
+      (file as any).webkitRelativePath &&
+      (file as any).webkitRelativePath.length > 0
+        ? (file as any).webkitRelativePath
+        : file.name,
+  }));
+};
+
+export const dropContainsDirectory = (entries: DroppedFileEntry[]): boolean => {
+  return entries.some((entry) => entry.relativePath.includes("/"));
+};

@@ -7,6 +7,7 @@ import {
   useRef,
   useMemo,
   useCallback,
+  type DragEvent,
 } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -18,7 +19,13 @@ import type {
   DriveDelivery,
   DriveFolder,
 } from "@/app/components/drive/browser/types";
-import { formatFileSize, isImage, isVideo } from "@/app/lib/drive-utils";
+import {
+  dropContainsDirectory,
+  extractDroppedFiles,
+  formatFileSize,
+  isImage,
+  isVideo,
+} from "@/app/lib/drive-utils";
 
 type Asset = {
   id: string;
@@ -215,13 +222,18 @@ export default function ClientProjectPage({
   }, [activeFolderId, folders]);
 
   const uploadAssets = useCallback(
-    async (incoming: FileList | File[]) => {
+    async (
+      incoming: FileList | File[],
+      options?: { targetFolderId?: string | null; refreshAfter?: boolean }
+    ) => {
       const files =
         incoming instanceof FileList ? Array.from(incoming) : [...incoming];
       if (files.length === 0) return;
 
       try {
-        const targetFolderId = resolveAssetFolderId();
+        const targetFolderId =
+          options?.targetFolderId ?? resolveAssetFolderId();
+        const shouldRefresh = options?.refreshAfter ?? true;
         setUploadingAssets(true);
         setError(null);
         setAssetUploadTotal(files.length);
@@ -336,7 +348,9 @@ export default function ClientProjectPage({
           setAssetUploadProgress(Math.round(completionProgress));
         }
 
-        await fetchProject();
+        if (shouldRefresh) {
+          await fetchProject();
+        }
         setAssetUploadProgress(100);
         setTimeout(() => setAssetUploadProgress(0), 400);
       } catch (e: any) {
@@ -361,6 +375,133 @@ export default function ClientProjectPage({
       void uploadAssets(incoming);
     },
     [uploadAssets]
+  );
+
+  const handleUploadDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    []
+  );
+
+  const handleUploadDrop = useCallback(
+    async (event: DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) {
+        return;
+      }
+      event.preventDefault();
+      const droppedEntries = await extractDroppedFiles(event.dataTransfer);
+      if (droppedEntries.length === 0) return;
+
+      const filesOnly = droppedEntries.map((entry) => entry.file);
+      if (!dropContainsDirectory(droppedEntries)) {
+        handleAssetFiles(filesOnly);
+        return;
+      }
+
+      const activeFolder = activeFolderId
+        ? folders.find((f) => f.id === activeFolderId)
+        : null;
+
+      const cacheKey = (parentId: string | null, name: string) =>
+        `${parentId ?? "__root__"}::${name.trim().toLowerCase()}`;
+      const folderIdCache = new Map<string, string>();
+      folders.forEach((folder) => {
+        folderIdCache.set(
+          cacheKey(folder.parentId ?? null, folder.name),
+          folder.id
+        );
+      });
+
+      const groupedByFolder = new Map<string, File[]>();
+      droppedEntries.forEach((entry) => {
+        const normalizedPath = entry.relativePath.replace(/\\/g, "/");
+        const segments = normalizedPath.split("/").filter(Boolean);
+        const filename = segments.pop();
+        if (!filename) return;
+        const folderPath = segments.join("/");
+        if (!groupedByFolder.has(folderPath)) {
+          groupedByFolder.set(folderPath, []);
+        }
+        groupedByFolder.get(folderPath)!.push(entry.file);
+      });
+
+      const createFolder = async (
+        name: string,
+        parentId: string | null
+      ): Promise<Folder> => {
+        const res = await fetch(`/api/projects/${id}/folders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, parentId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || `Failed to create folder "${name}"`);
+        }
+        const created = data as Folder;
+        folderIdCache.set(cacheKey(parentId, created.name), created.id);
+        return created;
+      };
+
+      const ensureFolderPath = async (
+        segments: string[],
+        baseFolderId: string | null
+      ): Promise<string | null> => {
+        let currentParentId = baseFolderId;
+        for (const segment of segments) {
+          const trimmed = segment.trim();
+          if (!trimmed) continue;
+          const key = cacheKey(currentParentId, trimmed);
+          if (!folderIdCache.has(key)) {
+            const created = await createFolder(trimmed, currentParentId);
+            currentParentId = created.id;
+            continue;
+          }
+          currentParentId = folderIdCache.get(key)!;
+        }
+        return currentParentId;
+      };
+
+      try {
+        setError(null);
+        const baseFolderId = activeFolder?.id ?? resolveAssetFolderId();
+
+        for (const [folderPath, groupedFiles] of groupedByFolder.entries()) {
+          const segments = folderPath.length > 0 ? folderPath.split("/") : [];
+          const destinationFolderId = await ensureFolderPath(
+            segments,
+            baseFolderId
+          );
+          if (!destinationFolderId) {
+            throw new Error("Unable to resolve destination folder.");
+          }
+
+          await uploadAssets(groupedFiles, {
+            targetFolderId: destinationFolderId,
+            refreshAfter: false,
+          });
+        }
+
+        await fetchProject();
+      } catch (error: any) {
+        console.error("Folder drop failed:", error);
+        setError(error?.message || "Failed to process dropped folder.");
+      }
+    },
+    [
+      activeFolderId,
+      folders,
+      handleAssetFiles,
+      fetchProject,
+      id,
+      resolveAssetFolderId,
+      uploadAssets,
+    ]
   );
 
   const handleUploadClick = useCallback(() => {
@@ -642,7 +783,11 @@ export default function ClientProjectPage({
           </div>
         )}
 
-        <section className="space-y-4">
+        <section
+          className="space-y-4"
+          onDragOver={handleUploadDragOver}
+          onDrop={handleUploadDrop}
+        >
           <DriveBrowserView
             browser={driveBrowser}
             assets={driveAssets}

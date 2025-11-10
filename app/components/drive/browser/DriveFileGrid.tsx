@@ -45,7 +45,9 @@ const renderFolderCard = (
   onRenameFolder?: (folder: DriveFolder) => void,
   onDeleteFolder?: (folder: DriveFolder) => void,
   renamingFolderId?: string | null,
-  deletingFolderId?: string | null
+  deletingFolderId?: string | null,
+  onDragStart?: (item: DriveDraggableItem) => void,
+  onDragEnd?: () => void
 ) => {
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     if (!onDropItem || !draggingItem) return;
@@ -77,6 +79,15 @@ const renderFolderCard = (
         event.preventDefault();
       }}
       onDrop={handleDrop}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        onDragStart?.({
+          kind: "FOLDER",
+          id: folder.id,
+          parentId: folder.parentId ?? null,
+        });
+      }}
+      onDragEnd={onDragEnd}
     >
       {(onRenameFolder || onDeleteFolder) && (
         <div className="absolute right-3 top-3 flex flex-col items-end gap-1 opacity-0 transition group-hover:opacity-100">
@@ -207,7 +218,9 @@ export const DriveFileGrid: FC<DriveFileGridProps> = ({
                 onRenameFolder,
                 onDeleteFolder,
                 renamingFolderId,
-                deletingFolderIdProp
+                deletingFolderIdProp,
+                onDragStart,
+                onDragEnd
               )
             )}
           </div>
