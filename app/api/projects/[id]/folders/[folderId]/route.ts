@@ -14,6 +14,10 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
   return parentId;
 }
 
+type ParentRelationUpdate =
+  | { connect: { id: string } }
+  | { disconnect: true };
+
 const updateFolderSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   parentId: z.string().min(1).optional().nullable(),
@@ -72,11 +76,11 @@ export async function PATCH(
       );
     }
 
-    let nextParentId: string | null | undefined = undefined;
+    let parentRelation: ParentRelationUpdate | undefined = undefined;
 
     if (parsed.parentId !== undefined) {
       if (parsed.parentId === null) {
-        nextParentId = null;
+        parentRelation = { disconnect: true };
       } else {
         const parentFolder = await prisma.folder.findFirst({
           where: {
@@ -113,21 +117,21 @@ export async function PATCH(
           currentParentId = await getParentFolderId(currentParentId);
         }
 
-        nextParentId = parentFolder.id;
+        parentRelation = { connect: { id: parentFolder.id } };
       }
     }
 
     const data: {
       name?: string;
-      parentId?: string | null;
+      parent?: ParentRelationUpdate;
     } = {};
 
     if (parsed.name) {
       data.name = parsed.name;
     }
 
-    if (nextParentId !== undefined) {
-      data.parentId = nextParentId;
+    if (parentRelation !== undefined) {
+      data.parent = parentRelation;
     }
 
     const updated = await prisma.folder.update({
