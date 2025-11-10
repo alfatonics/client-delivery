@@ -39,7 +39,14 @@ async function main() {
 
 const folders = await prisma.folder.findMany({
   where: { projectId },
-  orderBy: [{ parentId: "asc" }, { createdAt: "asc" }],
+});
+folders.sort((a, b) => {
+  if (a.parentId === b.parentId) {
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  }
+  if (a.parentId === null) return -1;
+  if (b.parentId === null) return 1;
+  return a.parentId.localeCompare(b.parentId);
 });
 
   if (folders.length === 0) {
