@@ -37,14 +37,24 @@ async function main() {
     return;
   }
 
-const folders = await prisma.folder.findMany({
-  where: { projectId },
-  include: {
-    parent: {
-      select: { id: true },
-    },
-  },
-});
+const folders = await prisma.folder
+  .findMany({
+    where: { projectId },
+  })
+  .then((list) =>
+    Promise.all(
+      list.map(async (folder) => {
+        const parent =
+          folder.parentId === null
+            ? null
+            : await prisma.folder.findUnique({
+                where: { id: folder.parentId },
+                select: { id: true },
+              });
+        return { ...folder, parent };
+      })
+    )
+  );
 folders.sort((a, b) => {
   const aParent = a.parent?.id ?? null;
   const bParent = b.parent?.id ?? null;
