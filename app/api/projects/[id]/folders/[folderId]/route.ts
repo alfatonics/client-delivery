@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
@@ -8,7 +9,7 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
     where: { id: folderId },
   });
 
-  return (record as any)?.parentId ?? null;
+  return record?.parentId ?? null;
 }
 
 const updateFolderSchema = z.object({
