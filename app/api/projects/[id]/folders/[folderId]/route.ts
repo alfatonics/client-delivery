@@ -4,13 +4,17 @@ import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+const parentOnlySelect = Prisma.validator<Prisma.FolderSelect>()({
+  parent: { select: { id: true } },
+});
+
 async function getParentFolderId(folderId: string): Promise<string | null> {
   const result = await prisma.folder.findUnique({
     where: { id: folderId },
-    select: { parentId: true },
+    select: parentOnlySelect,
   });
 
-  return result?.parentId ?? null;
+  return result?.parent?.id ?? null;
 }
 
 const updateFolderSchema = z.object({
