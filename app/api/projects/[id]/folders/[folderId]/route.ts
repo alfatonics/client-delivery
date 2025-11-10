@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
@@ -6,9 +7,10 @@ import { z } from "zod";
 async function getParentFolderId(folderId: string): Promise<string | null> {
   const result = await prisma.folder.findUnique({
     where: { id: folderId },
+    select: { parentId: true },
   });
 
-  return (result as { parentId: string | null } | null)?.parentId ?? null;
+  return result?.parentId ?? null;
 }
 
 const updateFolderSchema = z.object({
@@ -69,11 +71,13 @@ export async function PATCH(
       );
     }
 
-    let parentId: string | null | undefined = undefined;
+    let parentRelation:
+      | Prisma.FolderUpdateInput["parent"]
+      | undefined = undefined;
 
     if (parsed.parentId !== undefined) {
       if (parsed.parentId === null) {
-        parentId = null;
+        parentRelation = { disconnect: true };
       } else {
         const parentFolder = await prisma.folder.findFirst({
           where: {
@@ -110,16 +114,21 @@ export async function PATCH(
           currentParentId = await getParentFolderId(currentParentId);
         }
 
-        parentId = parentFolder.id;
+        parentRelation = { connect: { id: parentFolder.id } };
       }
+    }
+
+    const data: Prisma.FolderUpdateInput = {
+      ...(parsed.name && { name: parsed.name }),
+    };
+
+    if (parentRelation !== undefined) {
+      data.parent = parentRelation;
     }
 
     const updated = await prisma.folder.update({
       where: { id: folderId },
-      data: {
-        ...(parsed.name && { name: parsed.name }),
-        ...(parentId !== undefined && { parentId }),
-      },
+      data,
       include: {
         _count: {
           select: { assets: true, deliveries: true },
