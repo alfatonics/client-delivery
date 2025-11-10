@@ -4,14 +4,11 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 async function getParentFolderId(folderId: string): Promise<string | null> {
-  const result = await prisma.folder.findUnique({
+  const record = await prisma.folder.findUnique({
     where: { id: folderId },
-    include: {
-      parent: true,
-    },
   });
 
-  return result?.parent?.id ?? null;
+  return record?.parentId ?? null;
 }
 
 const updateFolderSchema = z.object({
