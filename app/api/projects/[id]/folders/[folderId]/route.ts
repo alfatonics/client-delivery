@@ -9,7 +9,10 @@ async function getParentFolderId(folderId: string): Promise<string | null> {
     where: { id: folderId },
   });
 
-  return record?.parentId ?? null;
+  const parentId =
+    (record as unknown as { parentId: string | null } | null)?.parentId ?? null;
+
+  return parentId;
 }
 
 const updateFolderSchema = z.object({
