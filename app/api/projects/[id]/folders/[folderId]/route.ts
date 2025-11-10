@@ -123,7 +123,7 @@ export async function PATCH(
       data: {
         ...(parsed.name ? { name: parsed.name } : {}),
         ...(nextParentId !== undefined
-          ? { parentId: nextParentId ?? null }
+          ? { parentId: { set: nextParentId ?? null } }
           : {}),
       } satisfies Prisma.FolderUncheckedUpdateInput,
       include: {
