@@ -18,7 +18,16 @@ export async function GET(
 
   const delivery = await prisma.delivery.findUnique({
     where: { id },
-    include: { project: true },
+    include: {
+      project: {
+        select: {
+          clientId: true,
+          staffAssignments: {
+            select: { staffId: true },
+          },
+        },
+      },
+    },
   });
 
   if (!delivery) return new NextResponse("Not Found", { status: 404 });
@@ -27,7 +36,10 @@ export async function GET(
   if (role === "CLIENT" && delivery.project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-  if (role === "STAFF" && delivery.project.staffId !== userId) {
+  const staffIds = new Set(
+    delivery.project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 

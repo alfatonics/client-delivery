@@ -18,7 +18,16 @@ export async function GET(
 
   const asset = await prisma.asset.findUnique({
     where: { id },
-    include: { project: true },
+    include: {
+      project: {
+        select: {
+          clientId: true,
+          staffAssignments: {
+            select: { staffId: true },
+          },
+        },
+      },
+    },
   });
 
   if (!asset) return new NextResponse("Not Found", { status: 404 });
@@ -27,7 +36,10 @@ export async function GET(
   if (role === "CLIENT" && asset.project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-  if (role === "STAFF" && asset.project.staffId !== userId) {
+  const staffIds = new Set(
+    asset.project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 

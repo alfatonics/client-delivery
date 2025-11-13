@@ -21,6 +21,9 @@ export async function POST(
   // Check project exists and is assigned to staff
   const project = await prisma.project.findUnique({
     where: { id },
+    include: {
+      staffAssignments: { select: { staffId: true } },
+    },
   });
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -30,7 +33,10 @@ export async function POST(
     return new NextResponse("Forbidden", { status: 403 });
   }
 
-  if (role === "STAFF" && project.staffId !== userId) {
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 

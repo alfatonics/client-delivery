@@ -17,7 +17,7 @@ const payloadSchema = z
 
 export async function POST(
   req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string; staffId: string }> }
 ) {
   const session = await auth();
   if (!session) {
@@ -27,7 +27,7 @@ export async function POST(
     return new NextResponse("Forbidden", { status: 403 });
   }
 
-  const { id } = await ctx.params;
+  const { id, staffId } = await ctx.params;
 
   let parsedBody: { notes?: string };
   try {
@@ -46,6 +46,7 @@ export async function POST(
       id: true,
       title: true,
       staffAssignments: {
+        where: { staffId },
         select: {
           staff: { select: { id: true, email: true, name: true } },
         },
@@ -60,36 +61,36 @@ export async function POST(
     return new NextResponse("Not Found", { status: 404 });
   }
 
-  const recipients = project.staffAssignments
-    .map((assignment) => assignment.staff)
-    .filter(
-      (staff): staff is { id: string; email: string; name: string | null } =>
-        Boolean(staff?.email && staff.email.trim().length > 0)
-    );
-
-  if (recipients.length === 0) {
+  if (project.staffAssignments.length === 0) {
     return NextResponse.json(
       {
-        error:
-          "Assign at least one team member to the project before sending the assignment email.",
+        error: "Staff member is not assigned to this project.",
+      },
+      { status: 400 }
+    );
+  }
+
+  const staff = project.staffAssignments[0]?.staff;
+  if (!staff || !staff.email || staff.email.trim().length === 0) {
+    return NextResponse.json(
+      {
+        error: "Staff member email not found.",
       },
       { status: 400 }
     );
   }
 
   try {
-    for (const staff of recipients) {
-      await sendProjectAssignmentEmail({
-        to: staff.email.trim(),
-        staffName: staff.name,
-        projectTitle: project.title,
-        projectId: project.id,
-        clientName: project.client?.name,
-        clientEmail: project.client?.email,
-        createdByName: project.createdBy?.name,
-        notes: parsedBody.notes,
-      });
-    }
+    await sendProjectAssignmentEmail({
+      to: staff.email.trim(),
+      staffName: staff.name,
+      projectTitle: project.title,
+      projectId: project.id,
+      clientName: project.client?.name,
+      clientEmail: project.client?.email,
+      createdByName: project.createdBy?.name,
+      notes: parsedBody.notes,
+    });
   } catch (error: any) {
     console.error("Failed to send project assignment email:", error);
     return NextResponse.json(
@@ -103,3 +104,4 @@ export async function POST(
 
   return NextResponse.json({ ok: true });
 }
+

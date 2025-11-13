@@ -26,7 +26,12 @@ export default async function AdminPage() {
     orderBy: { createdAt: "desc" },
     include: {
       client: { select: { id: true, email: true, name: true } },
-      staff: { select: { id: true, email: true, name: true } },
+      staffAssignments: {
+        include: {
+          staff: { select: { id: true, email: true, name: true } },
+        },
+        orderBy: { assignedAt: "asc" },
+      },
       createdBy: { select: { id: true, email: true, name: true, role: true } },
       assets: true,
       deliveries: {
@@ -158,7 +163,16 @@ export default async function AdminPage() {
                         </div>
                         <div className="text-sm text-[#5f6368]">
                           Client: {project.client.email}
-                          {project.staff && ` • Staff: ${project.staff.email}`}
+                          {project.staffAssignments.length > 0 && (
+                            <>
+                              {" "}
+                              • Staff:{" "}
+                              {project.staffAssignments
+                                .map((assignment) => assignment.staff?.email)
+                                .filter(Boolean)
+                                .join(", ")}
+                            </>
+                          )}
                           {project.createdBy && (
                             <>
                               <br />

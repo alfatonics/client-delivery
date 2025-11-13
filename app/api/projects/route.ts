@@ -19,7 +19,10 @@ export async function GET() {
       whereClause = {};
     } else if (role === "STAFF") {
       whereClause = {
-        OR: [{ staffId: userId }, { createdById: userId }],
+        OR: [
+          { staffAssignments: { some: { staffId: userId } } },
+          { createdById: userId },
+        ],
       };
     } else if (role === "CLIENT") {
       whereClause = { clientId: userId };
@@ -33,7 +36,13 @@ export async function GET() {
       take: 100,
       include: {
         client: { select: { id: true, email: true, name: true } },
-        staff: { select: { id: true, email: true, name: true } },
+        staffAssignments: {
+          include: {
+            staff: { select: { id: true, email: true, name: true } },
+            assignedBy: { select: { id: true, email: true, name: true } },
+          },
+          orderBy: { assignedAt: "asc" },
+        },
         assets: {
           select: { id: true, filename: true, type: true },
           orderBy: { createdAt: "desc" },

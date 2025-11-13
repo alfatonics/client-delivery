@@ -30,9 +30,11 @@ export async function PATCH(
         project: {
           select: {
             id: true,
-            staffId: true,
             clientId: true,
             createdById: true,
+            staffAssignments: {
+              select: { staffId: true },
+            },
           },
         },
       },
@@ -43,9 +45,12 @@ export async function PATCH(
     const project = asset.project;
 
     const isAdmin = role === "ADMIN";
+    const staffIds = new Set(
+      project.staffAssignments.map((assignment) => assignment.staffId)
+    );
     const isStaff =
       role === "STAFF" &&
-      (project.staffId === userId || project.createdById === userId);
+      (staffIds.has(userId) || project.createdById === userId);
     const isUploader = asset.uploadedById === userId;
 
     if (!isAdmin && !isStaff && !isUploader) {

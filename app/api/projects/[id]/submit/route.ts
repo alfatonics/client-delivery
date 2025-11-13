@@ -18,28 +18,27 @@ export async function POST(
     return new NextResponse("Forbidden", { status: 403 });
   }
 
-  const project = (await prisma.project.findUnique({
+  const project = await prisma.project.findUnique({
     where: { id },
     select: {
-      staffId: true,
       status: true,
       completionNotifiedAt: true,
       completionSubmittedAt: true,
       _count: { select: { deliveries: true } },
-    } as any,
-  })) as unknown as {
-    staffId: string | null;
-    status: string;
-    completionNotifiedAt: Date | null;
-    completionSubmittedAt: Date | null;
-    _count: { deliveries: number };
-  } | null;
+      staffAssignments: {
+        select: { staffId: true },
+      },
+    },
+  });
 
   if (!project) {
     return new NextResponse("Not Found", { status: 404 });
   }
 
-  if (project.staffId !== userId) {
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (!staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
@@ -53,25 +52,20 @@ export async function POST(
     );
   }
 
-  const updated = (await prisma.project.update({
+  const updated = await prisma.project.update({
     where: { id },
     data: {
       status: "COMPLETED",
       completionSubmittedAt: new Date(),
       completionSubmittedById: userId,
-    } as any,
+    },
     select: {
       id: true,
       status: true,
       completionSubmittedAt: true,
       completionNotifiedAt: true,
-    } as any,
-  })) as unknown as {
-    id: string;
-    status: string;
-    completionSubmittedAt: Date | null;
-    completionNotifiedAt: Date | null;
-  };
+    },
+  });
 
   return NextResponse.json({
     ok: true,

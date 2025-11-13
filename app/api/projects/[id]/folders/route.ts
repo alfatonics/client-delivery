@@ -24,6 +24,9 @@ export async function GET(
   // Check project exists
   const project = await prisma.project.findUnique({
     where: { id },
+    include: {
+      staffAssignments: { select: { staffId: true } },
+    },
   });
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -32,9 +35,12 @@ export async function GET(
   if (role === "CLIENT" && project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
   if (
     role === "STAFF" &&
-    project.staffId !== userId &&
+    !staffIds.has(userId) &&
     project.createdById !== userId
   ) {
     // Staff can view folders if assigned OR if they created the project
@@ -75,6 +81,9 @@ export async function POST(
   // Check project exists
   const project = await prisma.project.findUnique({
     where: { id },
+    include: {
+      staffAssignments: { select: { staffId: true } },
+    },
   });
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -83,9 +92,12 @@ export async function POST(
   if (role === "CLIENT" && project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
   if (
     role === "STAFF" &&
-    project.staffId !== userId &&
+    !staffIds.has(userId) &&
     project.createdById !== userId
   ) {
     // Staff can create folders if assigned OR if they created the project

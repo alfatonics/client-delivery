@@ -35,6 +35,9 @@ export async function PATCH(
   // Check project exists
   const project = await prisma.project.findUnique({
     where: { id },
+    include: {
+      staffAssignments: { select: { staffId: true } },
+    },
   });
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -43,7 +46,10 @@ export async function PATCH(
   if (role === "CLIENT" && project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-  if (role === "STAFF" && project.staffId !== userId) {
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
   if (role !== "ADMIN" && role !== "STAFF" && role !== "CLIENT") {
@@ -160,6 +166,9 @@ export async function DELETE(
   // Check project exists
   const project = await prisma.project.findUnique({
     where: { id },
+    include: {
+      staffAssignments: { select: { staffId: true } },
+    },
   });
 
   if (!project) return new NextResponse("Not Found", { status: 404 });
@@ -168,7 +177,10 @@ export async function DELETE(
   if (role === "CLIENT" && project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-  if (role === "STAFF" && project.staffId !== userId) {
+  const staffIds = new Set(
+    project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
   if (role !== "ADMIN" && role !== "STAFF" && role !== "CLIENT") {

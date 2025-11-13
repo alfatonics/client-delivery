@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, use, useRef, useMemo, useCallback } from "react";
-import type { DragEvent } from "react";
+import type { DragEvent, KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { generateFriendlyPassword } from "@/app/lib/password";
@@ -63,7 +63,13 @@ type Project = {
   description: string | null;
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
   client: { id: string; email: string; name: string | null };
-  staff: { id: string; email: string; name: string | null } | null;
+  staffAssignments: Array<{
+    id: string;
+    staffId: string;
+    assignedAt: string;
+    staff: { id: string; email: string; name: string | null } | null;
+    assignedBy: { id: string; email: string; name: string | null } | null;
+  }>;
   createdBy: {
     id: string;
     email: string;
@@ -120,10 +126,12 @@ export default function ProjectDetailPage({
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState(false);
-  const [selectedStaffId, setSelectedStaffId] = useState<string>("");
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
   const deliveryInputRef = useRef<HTMLInputElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const skipTitleSaveRef = useRef(false);
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [notifyEmail, setNotifyEmail] = useState("");
   const [notifyCc, setNotifyCc] = useState("");
@@ -149,6 +157,15 @@ export default function ProjectDetailPage({
   const [staffEmailSuccess, setStaffEmailSuccess] = useState<string | null>(
     null
   );
+  const [sendingEmailToStaffId, setSendingEmailToStaffId] = useState<
+    string | null
+  >(null);
+  const [staffEmailStatus, setStaffEmailStatus] = useState<
+    Record<string, { error?: string; success?: string }>
+  >({});
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
 
   const folders: Folder[] = project?.folders ?? [];
   const assetsList = project?.assets ?? [];
@@ -188,7 +205,11 @@ export default function ProjectDetailPage({
 
       setProject(projectData);
       setStaff(staffData);
-      setSelectedStaffId(projectData.staff?.id || "");
+      setSelectedStaffIds(
+        (projectData.staffAssignments ?? [])
+          .map((assignment: any) => assignment.staff?.id)
+          .filter((id: string | null | undefined): id is string => Boolean(id))
+      );
       setNotifyEmail(
         projectData.completionNotificationEmail ||
           projectData.client.email ||
@@ -1135,25 +1156,132 @@ export default function ProjectDetailPage({
     fetchCurrentUser();
   }, [fetchData, fetchCurrentUser]);
 
+  useEffect(() => {
+    if (isEditingTitle && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [isEditingTitle]);
+
+  const startEditingTitle = useCallback(() => {
+    if (!project || isEditingTitle || savingTitle) {
+      return;
+    }
+    skipTitleSaveRef.current = false;
+    setTitleDraft(project.title ?? "");
+    setIsEditingTitle(true);
+  }, [project, isEditingTitle, savingTitle]);
+
+  const cancelTitleEdit = useCallback(() => {
+    skipTitleSaveRef.current = true;
+    setIsEditingTitle(false);
+    setTitleDraft(project?.title ?? "");
+  }, [project]);
+
+  const submitTitle = useCallback(async () => {
+    skipTitleSaveRef.current = false;
+    if (!project || savingTitle) {
+      return;
+    }
+    const trimmed = titleDraft.trim();
+    const current = (project.title ?? "").trim();
+
+    if (trimmed === current) {
+      setIsEditingTitle(false);
+      return;
+    }
+
+    setSavingTitle(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to update project title");
+      }
+
+      await fetchData();
+      setIsEditingTitle(false);
+    } catch (e: any) {
+      console.error("Failed to update project title:", e);
+      setError(e.message || "Failed to update project title");
+      setIsEditingTitle(false);
+    } finally {
+      setSavingTitle(false);
+    }
+  }, [project, savingTitle, titleDraft, id, fetchData]);
+
+  const handleTitleBlur = useCallback(() => {
+    if (skipTitleSaveRef.current) {
+      skipTitleSaveRef.current = false;
+      return;
+    }
+    void submitTitle();
+  }, [submitTitle]);
+
+  const handleTitleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        skipTitleSaveRef.current = false;
+        void submitTitle();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelTitleEdit();
+      }
+    },
+    [submitTitle, cancelTitleEdit]
+  );
+
   const assignStaff = async () => {
     setAssigning(true);
     setStaffEmailError(null);
     setStaffEmailSuccess(null);
+    setStaffEmailStatus({}); // Clear previous email statuses
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          staffId: selectedStaffId || null,
-          status: selectedStaffId ? "IN_PROGRESS" : "PENDING",
+          staffIds: selectedStaffIds,
+          status: selectedStaffIds.length > 0 ? "IN_PROGRESS" : "PENDING",
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to assign staff");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to assign staff");
+      }
 
-      await fetchData();
-    } catch (e) {
-      console.error(e);
+      const updatedProject = await res.json();
+
+      // Log for debugging
+      console.log(
+        "Updated project assignments:",
+        updatedProject.staffAssignments?.length || 0
+      );
+      console.log("Selected staff IDs:", selectedStaffIds);
+
+      // Update project state immediately with the response
+      setProject(updatedProject);
+
+      // Update selectedStaffIds to match the updated assignments
+      const updatedStaffIds = (updatedProject.staffAssignments ?? [])
+        .map((assignment: any) => assignment.staff?.id)
+        .filter((id: string | null | undefined): id is string => Boolean(id));
+      setSelectedStaffIds(updatedStaffIds);
+
+      console.log("Updated staff IDs from response:", updatedStaffIds);
+    } catch (e: any) {
+      console.error("Failed to assign staff:", e);
+      setError(e.message || "Failed to assign staff");
     } finally {
       setAssigning(false);
     }
@@ -1242,7 +1370,11 @@ export default function ProjectDetailPage({
       const updatedProject = await res.json();
 
       setProject(updatedProject);
-      setSelectedStaffId(updatedProject.staff?.id || "");
+      setSelectedStaffIds(
+        (updatedProject.staffAssignments ?? [])
+          .map((assignment: any) => assignment.staff?.id)
+          .filter((id: string | null | undefined): id is string => Boolean(id))
+      );
       setNotifyEmail(
         updatedProject.completionNotificationEmail ||
           updatedProject.client.email ||
@@ -1262,7 +1394,12 @@ export default function ProjectDetailPage({
     setStaffEmailError(null);
     setStaffEmailSuccess(null);
 
-    if (!project?.staff?.email) {
+    const recipientEmails =
+      project?.staffAssignments
+        ?.map((assignment) => assignment.staff?.email?.trim())
+        .filter((email): email is string => Boolean(email)) ?? [];
+
+    if (recipientEmails.length === 0) {
       setStaffEmailError(
         "Assign a staff member before sending the assignment email."
       );
@@ -1290,6 +1427,51 @@ export default function ProjectDetailPage({
       );
     } finally {
       setSendingStaffEmail(false);
+    }
+  };
+
+  const sendEmailToIndividualStaff = async (staffId: string) => {
+    if (!project) return;
+
+    setSendingEmailToStaffId(staffId);
+    setStaffEmailStatus((prev) => ({
+      ...prev,
+      [staffId]: {},
+    }));
+
+    try {
+      const res = await fetch(`/api/projects/${id}/notify-staff/${staffId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to send email");
+      }
+
+      setStaffEmailStatus((prev) => ({
+        ...prev,
+        [staffId]: { success: "Email sent successfully" },
+      }));
+
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setStaffEmailStatus((prev) => {
+          const updated = { ...prev };
+          delete updated[staffId];
+          return updated;
+        });
+      }, 3000);
+    } catch (e: any) {
+      console.error("Failed to send email to staff:", e);
+      setStaffEmailStatus((prev) => ({
+        ...prev,
+        [staffId]: { error: e?.message || "Failed to send email" },
+      }));
+    } finally {
+      setSendingEmailToStaffId(null);
     }
   };
 
@@ -1507,6 +1689,53 @@ export default function ProjectDetailPage({
   const submittedAtLabel = formatDateTime(project.completionSubmittedAt);
   const notifiedAtLabel = formatDateTime(project.completionNotifiedAt);
   const canSendEmail = project.status === "COMPLETED";
+  const trimmedProjectTitle = (project.title ?? "").trim();
+  const displayTitle =
+    trimmedProjectTitle || `Project ${project.id.slice(0, 8)}`;
+  const titlePlaceholder = trimmedProjectTitle
+    ? "Enter project name"
+    : displayTitle;
+  const canModifyAssignments = currentUser?.role
+    ? currentUser.role === "ADMIN"
+    : true;
+  // Calculate assigned staff from project assignments
+  // Calculate directly from project to ensure it always reflects current state
+  const assignedStaff = project?.staffAssignments
+    ? project.staffAssignments
+        .filter(
+          (assignment) =>
+            assignment.staff !== null && assignment.staff !== undefined
+        )
+        .map((assignment) => {
+          const staff = assignment.staff!;
+          return {
+            id: staff.id,
+            email: staff.email,
+            name: staff.name,
+            assignmentId: assignment.id,
+            assignedAt: assignment.assignedAt,
+            assignedBy: assignment.assignedBy,
+          };
+        })
+    : [];
+
+  // Debug logging (can be removed later)
+  if (project?.staffAssignments) {
+    console.log("Assigned staff count:", assignedStaff.length);
+    console.log(
+      "Project staffAssignments count:",
+      project.staffAssignments.length
+    );
+    console.log(
+      "Assigned staff emails:",
+      assignedStaff.map((s) => s.email)
+    );
+  }
+
+  const assignedStaffEmails = assignedStaff
+    .map((staff) => staff.email)
+    .filter((email): email is string => Boolean(email));
+  const hasAssignedStaff = assignedStaff.length > 0;
 
   return (
     <div className="drive-container">
@@ -1528,11 +1757,41 @@ export default function ProjectDetailPage({
             </Link>
             <div>
               <h1 className="text-2xl font-normal text-[#202124]">
-                {project.title || `Project ${project.id.slice(0, 8)}`}
+                {isEditingTitle ? (
+                  <input
+                    ref={titleInputRef}
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onBlur={handleTitleBlur}
+                    onKeyDown={handleTitleKeyDown}
+                    className="input h-10 w-full max-w-xl px-3 text-base font-normal text-[#202124]"
+                    placeholder={titlePlaceholder}
+                    disabled={savingTitle}
+                    aria-label="Project name"
+                  />
+                ) : (
+                  <span
+                    className="cursor-text"
+                    onDoubleClick={startEditingTitle}
+                    title="Double-click to rename project"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        startEditingTitle();
+                      }
+                    }}
+                  >
+                    {displayTitle}
+                  </span>
+                )}
               </h1>
               <div className="text-sm text-[#5f6368] mt-1">
                 Client: {project.client.email}
-                {project.staff && ` • Staff: ${project.staff.email}`}
+                {hasAssignedStaff && assignedStaffEmails.length > 0 && (
+                  <> • Staff: {assignedStaffEmails.join(", ")}</>
+                )}
                 {project.createdBy && (
                   <>
                     <br />
@@ -1705,52 +1964,212 @@ export default function ProjectDetailPage({
         <div className="card space-y-3">
           <h2 className="font-medium text-[#202124]">Assign Staff</h2>
           <p className="text-sm text-[#5f6368]">
-            Choose a team member to manage this project. Assigning automatically
-            moves the project to "In Progress".
+            Choose one or more team members to manage this project. Assigning
+            automatically moves the project to "In Progress".
           </p>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <select
-              value={selectedStaffId}
-              onChange={(e) => setSelectedStaffId(e.target.value)}
-              className="input flex-1"
-            >
-              <option value="">-- No staff assigned --</option>
-              {staff.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.email} {s.name && `(${s.name})`}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={assignStaff}
-              disabled={assigning}
-              className="btn-primary disabled:opacity-50"
-            >
-              {assigning ? "Assigning..." : "Assign"}
-            </button>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-[#5f6368]">
-              {project?.staff?.email ? (
-                <>
-                  Currently assigned to{" "}
-                  <strong>
-                    {project.staff.email}
-                    {project.staff.name ? ` (${project.staff.name})` : ""}
-                  </strong>
-                </>
+            <div className="flex-1 border border-[#dadce0] rounded-lg p-3 min-h-[140px] max-h-[300px] overflow-y-auto bg-white">
+              {staff.length === 0 ? (
+                <div className="text-sm text-[#5f6368] py-2">
+                  No staff members available
+                </div>
               ) : (
-                "No staff member currently assigned."
+                <div className="space-y-2">
+                  {staff.map((s) => {
+                    const isSelected = selectedStaffIds.includes(s.id);
+                    return (
+                      <label
+                        key={s.id}
+                        className="flex items-center gap-2 p-2 rounded hover:bg-[#f8f9fa] cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              // Add to selection
+                              setSelectedStaffIds([...selectedStaffIds, s.id]);
+                            } else {
+                              // Remove from selection
+                              setSelectedStaffIds(
+                                selectedStaffIds.filter((id) => id !== s.id)
+                              );
+                            }
+                          }}
+                          disabled={!canModifyAssignments || assigning}
+                          className="w-4 h-4 text-blue-600 border-[#dadce0] rounded focus:ring-blue-500 focus:ring-2"
+                        />
+                        <span className="text-sm text-[#202124] flex-1">
+                          {s.email}{" "}
+                          {s.name && (
+                            <span className="text-[#5f6368]">({s.name})</span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
               )}
             </div>
-            <button
-              onClick={sendStaffAssignmentEmail}
-              disabled={sendingStaffEmail || !project?.staff?.email}
-              className="btn-secondary disabled:opacity-50 whitespace-nowrap"
-            >
-              {sendingStaffEmail ? "Sending..." : "Email Assigned Staff"}
-            </button>
+            <div className="flex flex-col gap-2 sm:w-48">
+              <button
+                onClick={assignStaff}
+                disabled={assigning || !canModifyAssignments}
+                className="btn-primary disabled:opacity-50"
+              >
+                {assigning ? "Saving..." : "Save Assignment"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedStaffIds([])}
+                className="btn-secondary disabled:opacity-50"
+                disabled={
+                  assigning ||
+                  !canModifyAssignments ||
+                  selectedStaffIds.length === 0
+                }
+              >
+                Clear Selection
+              </button>
+              {selectedStaffIds.length > 0 && (
+                <div className="text-xs text-[#5f6368] text-center pt-1">
+                  {selectedStaffIds.length} selected
+                </div>
+              )}
+            </div>
           </div>
+          {!canModifyAssignments && (
+            <p className="text-xs text-[#b91c1c]">
+              Only admins can update staff assignments.
+            </p>
+          )}
+
+          {/* Assigned Staff List */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-[#202124]">
+              Assigned Staff Members
+            </h3>
+            {hasAssignedStaff ? (
+              <div className="space-y-2">
+                {assignedStaff.map((staff) => {
+                  const isSending = sendingEmailToStaffId === staff.id;
+                  const status = staffEmailStatus[staff.id];
+                  const assignment = project.staffAssignments.find(
+                    (a) => a.staffId === staff.id
+                  );
+
+                  return (
+                    <div
+                      key={staff.id}
+                      className="flex items-center justify-between gap-3 p-3 border border-[#dadce0] rounded-lg bg-white hover:bg-[#f8f9fa] transition-colors"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium text-[#202124] truncate">
+                            {staff.email}
+                          </div>
+                          {staff.name && (
+                            <span className="text-sm text-[#5f6368] truncate">
+                              ({staff.name})
+                            </span>
+                          )}
+                        </div>
+                        {assignment?.assignedAt && (
+                          <div className="text-xs text-[#5f6368] mt-1">
+                            Assigned{" "}
+                            {new Date(
+                              assignment.assignedAt
+                            ).toLocaleDateString()}
+                            {assignment.assignedBy && (
+                              <> by {assignment.assignedBy.email}</>
+                            )}
+                          </div>
+                        )}
+                        {status?.success && (
+                          <div className="text-xs text-green-600 mt-1">
+                            {status.success}
+                          </div>
+                        )}
+                        {status?.error && (
+                          <div className="text-xs text-red-600 mt-1">
+                            {status.error}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => sendEmailToIndividualStaff(staff.id)}
+                        disabled={isSending}
+                        className="btn-secondary disabled:opacity-50 whitespace-nowrap text-sm px-3 py-1.5"
+                        title={`Send assignment email to ${staff.email}`}
+                      >
+                        {isSending ? (
+                          <>
+                            <svg
+                              className="animate-spin -ml-1 mr-2 h-4 w-4 inline-block"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              />
+                            </svg>
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              className="mr-1.5 inline-block"
+                            >
+                              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                              <polyline points="22,6 12,13 2,6" />
+                            </svg>
+                            Send Email
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-sm text-[#5f6368] p-3 border border-[#dadce0] rounded-lg bg-[#f8f9fa]">
+                No staff members currently assigned.
+              </div>
+            )}
+          </div>
+
+          {/* Legacy: Send to All Button (optional - can be removed if not needed) */}
+          {hasAssignedStaff && (
+            <div className="flex items-center justify-between pt-2 border-t border-[#dadce0]">
+              <div className="text-sm text-[#5f6368]">
+                Send email to all assigned staff at once
+              </div>
+              <button
+                onClick={sendStaffAssignmentEmail}
+                disabled={sendingStaffEmail || !hasAssignedStaff}
+                className="btn-secondary disabled:opacity-50 whitespace-nowrap text-sm"
+              >
+                {sendingStaffEmail ? "Sending..." : "Email All Staff"}
+              </button>
+            </div>
+          )}
           {staffEmailError && (
             <div className="text-sm text-red-600">{staffEmailError}</div>
           )}

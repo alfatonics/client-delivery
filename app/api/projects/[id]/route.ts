@@ -1,5 +1,6 @@
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
+import { sendProjectAssignmentEmail } from "@/app/lib/email";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -8,7 +9,7 @@ const updateProjectSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   status: z.enum(["PENDING", "IN_PROGRESS", "COMPLETED"]).optional(),
-  staffId: z.string().optional().nullable(),
+  staffIds: z.array(z.string()).optional(),
 });
 
 // GET - Get single project
@@ -27,7 +28,13 @@ export async function GET(
       where: { id },
       include: {
         client: { select: { id: true, email: true, name: true } },
-        staff: { select: { id: true, email: true, name: true } },
+        staffAssignments: {
+          include: {
+            staff: { select: { id: true, email: true, name: true } },
+            assignedBy: { select: { id: true, email: true, name: true } },
+          },
+          orderBy: { assignedAt: "asc" },
+        },
         createdBy: {
           select: { id: true, email: true, name: true, role: true },
         },
@@ -94,7 +101,13 @@ export async function GET(
         where: { id },
         include: {
           client: { select: { id: true, email: true, name: true } },
-          staff: { select: { id: true, email: true, name: true } },
+          staffAssignments: {
+            include: {
+              staff: { select: { id: true, email: true, name: true } },
+              assignedBy: { select: { id: true, email: true, name: true } },
+            },
+            orderBy: { assignedAt: "asc" },
+          },
           createdBy: {
             select: { id: true, email: true, name: true, role: true },
           },
@@ -131,9 +144,12 @@ export async function GET(
     if (role === "CLIENT" && project.clientId !== userId) {
       return new NextResponse("Forbidden", { status: 403 });
     }
+    const staffIds = new Set(
+      project.staffAssignments.map((assignment) => assignment.staffId)
+    );
     if (
       role === "STAFF" &&
-      project.staffId !== userId &&
+      !staffIds.has(userId) &&
       project.createdById !== userId
     ) {
       // Staff can view projects they're assigned to OR projects they created
@@ -169,7 +185,9 @@ export async function PATCH(
       where: { id },
       include: {
         client: { select: { id: true, email: true, name: true } },
-        staff: { select: { id: true } },
+        staffAssignments: {
+          select: { staffId: true },
+        },
         _count: { select: { deliveries: true } },
       },
     });
@@ -180,7 +198,10 @@ export async function PATCH(
     if (role === "CLIENT") {
       return new NextResponse("Forbidden", { status: 403 });
     }
-    if (role === "STAFF" && project.staffId !== userId) {
+    const existingStaffIds = new Set(
+      project.staffAssignments.map((assignment) => assignment.staffId)
+    );
+    if (role === "STAFF" && !existingStaffIds.has(userId)) {
       return new NextResponse("Forbidden", { status: 403 });
     }
 
@@ -192,17 +213,34 @@ export async function PATCH(
     if (parsed.description !== undefined) {
       updateData.description = parsed.description;
     }
-    if (parsed.staffId !== undefined) {
-      if (role !== "ADMIN" && parsed.staffId !== project.staff?.id) {
-        return new NextResponse("Forbidden", { status: 403 });
+    let staffAssignmentsUpdate:
+      | {
+          projectId: string;
+          staffId: string;
+        }[]
+      | undefined;
+    if (parsed.staffIds !== undefined) {
+      if (role !== "ADMIN") {
+        const incomingStaffIds = new Set(parsed.staffIds);
+        const removedStaff = [...existingStaffIds].filter(
+          (staffId) => !incomingStaffIds.has(staffId)
+        );
+        const addedStaff = [...incomingStaffIds].filter(
+          (staffId) => !existingStaffIds.has(staffId)
+        );
+        const userRemains = incomingStaffIds.has(userId);
+        if (
+          !userRemains ||
+          removedStaff.length > 0 ||
+          addedStaff.some((id) => id !== userId)
+        ) {
+          return new NextResponse("Forbidden", { status: 403 });
+        }
       }
-      updateData.staff =
-        parsed.staffId === null
-          ? { disconnect: true }
-          : { connect: { id: parsed.staffId } };
-      if (parsed.staffId === null && role !== "ADMIN") {
-        return new NextResponse("Forbidden", { status: 403 });
-      }
+      staffAssignmentsUpdate = [...new Set(parsed.staffIds)].map((staffId) => ({
+        projectId: project.id,
+        staffId,
+      }));
     }
 
     if (parsed.status !== undefined) {
@@ -223,25 +261,29 @@ export async function PATCH(
       updateData.status = parsed.status;
 
       if (parsed.status === "COMPLETED") {
-        (updateData as Prisma.ProjectUpdateInput & {
-          completionSubmittedAt?: Date | null;
-          completionSubmittedBy?: { connect: { id: string } };
-          completionNotifiedAt?: Date | null;
-          completionNotifiedBy?: { disconnect?: boolean };
-          completionNotifiedById?: string | null;
-          completionNotificationEmail?: string | null;
-          completionNotificationCc?: string | null;
-        }).completionSubmittedAt = new Date();
+        (
+          updateData as Prisma.ProjectUpdateInput & {
+            completionSubmittedAt?: Date | null;
+            completionSubmittedBy?: { connect: { id: string } };
+            completionNotifiedAt?: Date | null;
+            completionNotifiedBy?: { disconnect?: boolean };
+            completionNotifiedById?: string | null;
+            completionNotificationEmail?: string | null;
+            completionNotificationCc?: string | null;
+          }
+        ).completionSubmittedAt = new Date();
         (updateData as any).completionSubmittedBy = { connect: { id: userId } };
       } else {
-        (updateData as Prisma.ProjectUpdateInput & {
-          completionSubmittedAt?: Date | null;
-          completionSubmittedBy?: { disconnect?: boolean };
-          completionNotifiedAt?: Date | null;
-          completionNotifiedBy?: { disconnect?: boolean };
-          completionNotificationEmail?: string | null;
-          completionNotificationCc?: string | null;
-        }).completionSubmittedAt = null;
+        (
+          updateData as Prisma.ProjectUpdateInput & {
+            completionSubmittedAt?: Date | null;
+            completionSubmittedBy?: { disconnect?: boolean };
+            completionNotifiedAt?: Date | null;
+            completionNotifiedBy?: { disconnect?: boolean };
+            completionNotificationEmail?: string | null;
+            completionNotificationCc?: string | null;
+          }
+        ).completionSubmittedAt = null;
         (updateData as any).completionSubmittedBy = { disconnect: true };
         (updateData as any).completionNotifiedAt = null;
         (updateData as any).completionNotifiedBy = { disconnect: true };
@@ -255,10 +297,16 @@ export async function PATCH(
         where: { id },
         include: {
           client: { select: { id: true, email: true, name: true } },
-        staff: { select: { id: true, email: true, name: true } },
-        createdBy: {
-          select: { id: true, email: true, name: true, role: true },
-        },
+          staffAssignments: {
+            include: {
+              staff: { select: { id: true, email: true, name: true } },
+              assignedBy: { select: { id: true, email: true, name: true } },
+            },
+            orderBy: { assignedAt: "asc" },
+          },
+          createdBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
           assets: true,
           deliveries: true,
         },
@@ -266,19 +314,101 @@ export async function PATCH(
       return NextResponse.json(unchangedProject);
     }
 
-    const updated = await prisma.project.update({
+    let updated = await prisma.project.update({
       where: { id },
       data: updateData,
       include: {
         client: { select: { id: true, email: true, name: true } },
-        staff: { select: { id: true, email: true, name: true } },
         createdBy: {
           select: { id: true, email: true, name: true, role: true },
         },
         assets: true,
         deliveries: true,
+        staffAssignments: {
+          include: {
+            staff: { select: { id: true, email: true, name: true } },
+            assignedBy: { select: { id: true, email: true, name: true } },
+          },
+          orderBy: { assignedAt: "asc" },
+        },
       },
     });
+
+    if (staffAssignmentsUpdate !== undefined) {
+      await prisma.projectStaffAssignment.deleteMany({
+        where: { projectId: id },
+      });
+
+      if (staffAssignmentsUpdate.length > 0) {
+        await prisma.projectStaffAssignment.createMany({
+          data: staffAssignmentsUpdate.map((assignment) => ({
+            ...assignment,
+            assignedById: session.user.id,
+          })),
+        });
+      }
+
+      const updatedProject = await prisma.project.findUnique({
+        where: { id },
+        include: {
+          client: { select: { id: true, email: true, name: true } },
+          createdBy: {
+            select: { id: true, email: true, name: true, role: true },
+          },
+          assets: true,
+          deliveries: true,
+          staffAssignments: {
+            include: {
+              staff: { select: { id: true, email: true, name: true } },
+              assignedBy: { select: { id: true, email: true, name: true } },
+            },
+            orderBy: { assignedAt: "asc" },
+          },
+        },
+      });
+
+      if (!updatedProject) {
+        return new NextResponse("Not Found", { status: 404 });
+      }
+
+      updated = updatedProject;
+
+      // Automatically send emails to all assigned staff (including newly assigned)
+      if (updated.staffAssignments.length > 0) {
+        const assignedStaff = updated.staffAssignments
+          .map((assignment) => assignment.staff)
+          .filter(
+            (
+              staff
+            ): staff is { id: string; email: string; name: string | null } =>
+              Boolean(staff?.email && staff.email.trim().length > 0)
+          );
+
+        // Send emails to all assigned staff in the background
+        // We don't await this to avoid blocking the response
+        Promise.all(
+          assignedStaff.map((staff) =>
+            sendProjectAssignmentEmail({
+              to: staff.email.trim(),
+              staffName: staff.name,
+              projectTitle: updated.title,
+              projectId: updated.id,
+              clientName: updated.client?.name,
+              clientEmail: updated.client?.email,
+              createdByName: session.user.name || session.user.email,
+            }).catch((error) => {
+              console.error(
+                `Failed to send assignment email to ${staff.email}:`,
+                error
+              );
+              // Don't throw - we don't want email failures to break the assignment
+            })
+          )
+        ).catch((error) => {
+          console.error("Error sending assignment emails:", error);
+        });
+      }
+    }
 
     return NextResponse.json(updated);
   } catch (error: any) {

@@ -30,9 +30,11 @@ export async function POST(
         where: { id },
         select: {
           id: true,
-          staffId: true,
           createdById: true,
           clientId: true,
+          staffAssignments: {
+            select: { staffId: true },
+          },
         },
       });
     } catch (dbError: any) {
@@ -57,8 +59,11 @@ export async function POST(
 
     // Staff can upload if they are assigned to the project OR if they created the project
     if (role === "STAFF") {
+      const staffIds = new Set(
+        project.staffAssignments.map((assignment) => assignment.staffId)
+      );
       const canUpload =
-        project.staffId === userId ||
+        staffIds.has(userId) ||
         (project.createdById !== null && project.createdById === userId);
 
       if (!canUpload) {

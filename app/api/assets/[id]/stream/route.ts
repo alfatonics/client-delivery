@@ -19,7 +19,14 @@ export async function GET(
   const asset = await prisma.asset.findUnique({
     where: { id },
     include: {
-      project: true,
+      project: {
+        select: {
+          clientId: true,
+          staffAssignments: {
+            select: { staffId: true },
+          },
+        },
+      },
       uploadedBy: { select: { id: true, email: true } },
     },
   });
@@ -30,7 +37,10 @@ export async function GET(
   if (role === "CLIENT" && asset.project.clientId !== userId) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-  if (role === "STAFF" && asset.project.staffId !== userId) {
+  const staffIds = new Set(
+    asset.project.staffAssignments.map((assignment) => assignment.staffId)
+  );
+  if (role === "STAFF" && !staffIds.has(userId)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
 
@@ -43,5 +53,3 @@ export async function GET(
 
   return NextResponse.redirect(url, { status: 302 });
 }
-
-
