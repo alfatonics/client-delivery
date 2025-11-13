@@ -164,7 +164,11 @@ export async function POST(
     } as any,
     include: {
       client: { select: { id: true, email: true, name: true } },
-      staff: { select: { id: true, email: true, name: true } },
+      staffAssignments: {
+        include: {
+          staff: { select: { id: true, email: true, name: true } },
+        },
+      },
       createdBy: { select: { id: true, email: true, name: true, role: true } },
       assets: true,
       deliveries: true,
