@@ -143,7 +143,7 @@ export default function ClientProjectPage({
   }, [fetchProject, fetchCurrentUser]);
 
   const folders = project?.folders ?? [];
-  const assetsList = project?.assets ?? [];
+  const assetsList: Asset[] = []; // Clients should not see assets
   const deliveriesList = project?.deliveries ?? [];
 
   const driveFolders = useMemo<DriveFolder[]>(
@@ -189,37 +189,31 @@ export default function ClientProjectPage({
 
   const driveBrowser = useDriveBrowser({
     folders: driveFolders,
-    assets: driveAssets,
+    assets: [], // Clients should not see assets
     deliveries: driveDeliveries,
-    canUpload: true,
+    canUpload: false, // Clients cannot upload - they only view deliverables
     canCreateFolder: false,
+    allowedFolderTypes: ["DELIVERABLES", "PROJECT"], // Only show DELIVERABLES and PROJECT folders
   });
 
   const { activeFolderId, setActiveFolderId } = driveBrowser;
 
   useEffect(() => {
     if (!project || activeFolderId) return;
+    // For clients, default to DELIVERABLES folder instead of ASSETS
     const defaultFolder =
-      project.folders.find((f) => f.type === "ASSETS") ?? project.folders[0];
+      project.folders.find((f) => f.type === "DELIVERABLES") ??
+      project.folders.find((f) => f.type === "PROJECT") ??
+      project.folders[0];
     if (defaultFolder) {
       setActiveFolderId(defaultFolder.id);
     }
   }, [project, activeFolderId, setActiveFolderId]);
 
   const resolveAssetFolderId = useCallback(() => {
-    if (activeFolderId) {
-      const folder = folders.find((f) => f.id === activeFolderId);
-      if (!folder || folder.type !== "ASSETS") {
-        throw new Error("Select an Assets folder before uploading files.");
-      }
-      return folder.id;
-    }
-    const assetsFolder = folders.find((f) => f.type === "ASSETS");
-    if (!assetsFolder) {
-      throw new Error("No Assets folder found. Please contact support.");
-    }
-    return assetsFolder.id;
-  }, [activeFolderId, folders]);
+    // Clients should not be able to upload assets
+    throw new Error("Clients cannot upload assets. Please contact support.");
+  }, []);
 
   const uploadAssets = useCallback(
     async (
@@ -508,30 +502,8 @@ export default function ClientProjectPage({
     try {
       setError(null);
 
-      if (!activeFolderId) {
-        const hasAssetsFolder = folders.some(
-          (folder) => folder.type === "ASSETS"
-        );
-        if (!hasAssetsFolder) {
-          throw new Error("No Assets folder found. Please contact support.");
-        }
-        assetInputRef.current?.click();
-        return;
-      }
-
-      const targetFolder = folders.find(
-        (folder) => folder.id === activeFolderId
-      );
-      if (!targetFolder) {
-        throw new Error(
-          "Selected folder is no longer available. Reload the page and try again."
-        );
-      }
-      if (targetFolder.type !== "ASSETS") {
-        throw new Error("Select an Assets folder before uploading files.");
-      }
-
-      assetInputRef.current?.click();
+      // Clients cannot upload assets - they only view deliverables
+      throw new Error("Clients cannot upload files. Please contact support.");
     } catch (e: any) {
       setError(e.message || "Select an Assets folder before uploading files.");
     }
@@ -783,11 +755,7 @@ export default function ClientProjectPage({
           </div>
         )}
 
-        <section
-          className="space-y-4"
-          onDragOver={handleUploadDragOver}
-          onDrop={handleUploadDrop}
-        >
+        <section className="space-y-4">
           <DriveBrowserView
             browser={driveBrowser}
             assets={driveAssets}
@@ -815,8 +783,8 @@ export default function ClientProjectPage({
             }
             emptyState={
               <div className="text-sm text-[#5f6368]">
-                No files yet. Upload assets to share them with your project
-                team.
+                No deliverables yet. Your project team will upload deliverables
+                here when they are ready.
               </div>
             }
           />

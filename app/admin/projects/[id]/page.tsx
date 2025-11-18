@@ -1719,19 +1719,6 @@ export default function ProjectDetailPage({
         })
     : [];
 
-  // Debug logging (can be removed later)
-  if (project?.staffAssignments) {
-    console.log("Assigned staff count:", assignedStaff.length);
-    console.log(
-      "Project staffAssignments count:",
-      project.staffAssignments.length
-    );
-    console.log(
-      "Assigned staff emails:",
-      assignedStaff.map((s) => s.email)
-    );
-  }
-
   const assignedStaffEmails = assignedStaff
     .map((staff) => staff.email)
     .filter((email): email is string => Boolean(email));

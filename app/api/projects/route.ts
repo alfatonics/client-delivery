@@ -56,6 +56,15 @@ export async function GET() {
       },
     });
 
+    // For clients, filter out assets - they should only see deliverables
+    if (role === "CLIENT") {
+      const filteredProjects = projects.map((project) => ({
+        ...project,
+        assets: [],
+      }));
+      return NextResponse.json(filteredProjects);
+    }
+
     return NextResponse.json(projects);
   } catch (error: any) {
     console.error("Error fetching projects:", error);

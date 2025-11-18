@@ -156,6 +156,16 @@ export async function GET(
       return new NextResponse("Forbidden", { status: 403 });
     }
 
+    // For clients, filter out assets and ASSETS folders - they should only see deliverables
+    if (role === "CLIENT") {
+      const filteredProject = {
+        ...project,
+        assets: [],
+        folders: project.folders.filter((folder) => folder.type !== "ASSETS"),
+      };
+      return NextResponse.json(filteredProject);
+    }
+
     return NextResponse.json(project);
   } catch (error: any) {
     console.error("Error in GET /api/projects/[id]:", error);

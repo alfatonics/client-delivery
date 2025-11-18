@@ -163,11 +163,7 @@ export default function ClientDashboard() {
                   <div className={getStatusBadgeClass(project.status)}>
                     {project.status.replace("_", " ")}
                   </div>
-                  <div className="mt-3 text-xs text-[#5f6368] space-y-1">
-                    <div>
-                      {project.assets.length} asset
-                      {project.assets.length !== 1 ? "s" : ""}
-                    </div>
+                  <div className="mt-3 text-xs text-[#5f6368]">
                     <div>
                       {project.deliveries.length} deliver
                       {project.deliveries.length !== 1 ? "ies" : "y"}
